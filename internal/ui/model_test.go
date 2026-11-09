@@ -35,7 +35,7 @@ func waitingHarness(t *testing.T) *harness {
 
 func TestWaitingForKodi(t *testing.T) {
 	h := waitingHarness(t)
-	h.want("waiting for Kodi…", "connection refused", "■ stopped")
+	h.want("Waiting for Kodi…", "connection refused", "■ Kodi unreachable, retrying…")
 
 	h.advance(time.Second)
 	if n := h.count("AudioLibrary.GetArtists"); n != 2 {
@@ -108,7 +108,7 @@ func TestEnterOnTrackPlaysAlbumFromIt(t *testing.T) {
 		if playing, _, pos := h.kodi.Playing(); !playing || pos != 1 {
 			t.Errorf("%s: playing %v at %d, want position 1", key, playing, pos)
 		}
-		h.want("▶ 03:12/08:55  Brian Eno – 2/1  [2/4]")
+		h.want("▶ 03:12/08:55  Brian Eno – 2/1 · Ambient 1  [2/4]")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestPlayKey(t *testing.T) {
 	if q := h.kodi.Queue(); !slices.Equal(q, []int{101, 102, 103, 104}) {
 		t.Errorf("album: queue = %v", q)
 	}
-	h.want("▶ 03:12/17:01  Brian Eno – 1/1  [1/4]")
+	h.want("▶ 03:12/17:01  Brian Eno – 1/1 · Ambient 1  [1/4]")
 	h.press("enter", "end", "p") // the album from its last track
 	if _, _, pos := h.kodi.Playing(); pos != 3 {
 		t.Errorf("track: position %d, want 3", pos)
@@ -227,7 +227,7 @@ func TestNothingPlaying(t *testing.T) {
 	for _, key := range []string{"r", "s", "shift+right", "shift+left", "space", "x", ".", ","} {
 		h.kodi.Reset()
 		h.press(key)
-		h.want("nothing is playing")
+		h.want("Nothing is playing")
 		for _, method := range h.kodi.Methods() {
 			if strings.HasPrefix(method, "Player.") && method != "Player.GetActivePlayers" {
 				t.Errorf("%s: called %s", key, method)
@@ -329,7 +329,7 @@ func TestErrorsFlash(t *testing.T) {
 		return nil, &kodi.Error{Code: -32100, Message: "Failed to execute method."}
 	})
 	h.press("space")
-	h.want("Kodi: Player.PlayPause: Failed to execute method.")
+	h.want("Kodi couldn't do that (Player.PlayPause: Failed to execute method).")
 	h.wantNot("? help")
 	if !h.m.flashErr {
 		t.Error("a Kodi error is not flashed as an error")
@@ -345,7 +345,7 @@ func TestLostConnection(t *testing.T) {
 	h.advance(3 * time.Second)
 	h.kodi.Handle("Player.GetActivePlayers", unavailable)
 	h.advance(time.Second)
-	h.want("■ stopped", "Kodi unavailable: 127.0.0.1:9090: connection refused")
+	h.want("■ Kodi unreachable, retrying…")
 
 	// Back again: the first reading after the gap shows no pop-up.
 	h.kodi.Reply("Player.GetActivePlayers", []map[string]any{{"playerid": 0, "type": "audio"}})

@@ -70,13 +70,23 @@ func helpDoc(table []keySection, t theme, inner int, version string, titled bool
 		return []span{{pad(s, kodiWidth), t.dim}}
 	}
 
-	kodiHeading := true // over the first section with Kodi keys
+	kodiHeading := withKodi // over the first section with Kodi keys
 	for _, section := range table {
-		heading := helpLine{left: []span{{section.title, t.strong}}}
+		// The title, then a rule to the end of the line, with the Kodi
+		// column's heading set into the first one.
+		title := width(section.title)
+		heading := []span{{section.title, t.strong}}
 		if kodiHeading && slices.ContainsFunc(section.rows, func(r keyRow) bool { return r.kodi != "" }) {
-			heading.right, kodiHeading = kodiCell("in Kodi"), false
+			column := inner - kodiWidth
+			heading = append(heading,
+				span{" " + rule(column-title-2) + " ", t.dim},
+				span{"in Kodi", t.dim},
+				span{" " + rule(inner-column-len("in Kodi")-1), t.dim})
+			kodiHeading = false
+		} else {
+			heading = append(heading, span{" " + rule(inner-title-1), t.dim})
 		}
-		lines = append(lines, heading)
+		lines = append(lines, helpLine{left: heading})
 		for _, row := range section.rows {
 			action := flow{room: func(int) int { return max(1, actionWidth) }}
 			action.text(row.action, nil, t.plain)
@@ -149,3 +159,6 @@ func KeysHelp() string {
 	}
 	return b.String()
 }
+
+// rule returns a horizontal rule n columns long.
+func rule(n int) string { return strings.Repeat("─", max(0, n)) }

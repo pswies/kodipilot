@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/BurntSushi/toml"
@@ -30,6 +31,7 @@ const (
 	DefaultTCPPort  = 9090
 	DefaultHTTPPort = 8080
 	DefaultHTTPUser = "kodi"
+	DefaultArt      = "symbols"
 )
 
 // Environment variables.
@@ -37,6 +39,7 @@ const (
 	EnvHost     = "KODIPILOT_HOST"
 	EnvUser     = "KODIPILOT_USER"
 	EnvPassword = "KODIPILOT_PASSWORD"
+	EnvArt      = "KODIPILOT_ART"
 )
 
 // Settings is one source of settings. Zero fields are unset.
@@ -46,6 +49,7 @@ type Settings struct {
 	Transport string `toml:"transport"`
 	User      string `toml:"user"`
 	Password  string `toml:"password"`
+	Art       string `toml:"art"`
 }
 
 // Sources are the inputs that Load merges.
@@ -63,6 +67,7 @@ type Config struct {
 	Port      int
 	User      string // HTTP only
 	Password  string // HTTP only
+	Art       string // how images are drawn: symbols, blocks, ascii or off
 }
 
 // Addr returns host:port.
@@ -85,12 +90,17 @@ func Load(src Sources) (Config, []string, error) {
 		Host:     src.Getenv(EnvHost),
 		User:     src.Getenv(EnvUser),
 		Password: src.Getenv(EnvPassword),
+		Art:      src.Getenv(EnvArt),
 	}
 	flags := src.Flags
 	flags.Password = "" // passwords never come from flags
 	s := merge(flags, env, file)
 
-	cfg := Config{Host: cmp.Or(s.Host, DefaultHost), Port: s.Port, User: s.User, Password: s.Password}
+	cfg := Config{Host: cmp.Or(s.Host, DefaultHost), Port: s.Port, User: s.User, Password: s.Password,
+		Art: cmp.Or(s.Art, DefaultArt)}
+	if !slices.Contains([]string{"symbols", "blocks", "ascii", "off"}, cfg.Art) {
+		return Config{}, warnings, fmt.Errorf("unknown art %q (want symbols, blocks, ascii or off)", cfg.Art)
+	}
 	switch Transport(s.Transport) {
 	case TCP, HTTP:
 		cfg.Transport = Transport(s.Transport)
@@ -170,6 +180,7 @@ func merge(layers ...Settings) Settings {
 		s.Transport = cmp.Or(s.Transport, l.Transport)
 		s.User = cmp.Or(s.User, l.User)
 		s.Password = cmp.Or(s.Password, l.Password)
+		s.Art = cmp.Or(s.Art, l.Art)
 	}
 	return s
 }

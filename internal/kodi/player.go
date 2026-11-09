@@ -41,6 +41,8 @@ func NewPlayer(client Client) *Player {
 
 // Status describes what the audio player is playing.
 type Status struct {
+	SongID   int // 0 when the item is not a library song
+	AlbumID  int
 	Artist   string
 	Title    string
 	Album    string
@@ -252,20 +254,47 @@ func (p *Player) ToggleMute(ctx context.Context) (Volume, error) {
 
 // NowPlaying returns the audio player's status, or nil when no audio plays.
 func (p *Player) NowPlaying(ctx context.Context) (*Status, error) {
-	id, ok, err := p.audioPlayer(ctx)
-	if err != nil || !ok {
-		return nil, err
+	status, _, err := p.Playing(ctx)
+	return status, err
+}
+
+// Playing returns the audio player's status (nil when no audio plays) and
+// whether a video plays.
+func (p *Player) Playing(ctx context.Context) (status *Status, video bool, err error) {
+	players, err := p.activePlayers(ctx)
+	if err != nil {
+		return nil, false, err
 	}
+	id, audio := 0, false
+	for _, player := range players {
+		switch player.Type {
+		case "audio":
+			id, audio = player.ID, true
+		case "video":
+			video = true
+		}
+	}
+	if !audio {
+		return nil, video, nil
+	}
+	status, err = p.audioStatus(ctx, id)
+	return status, video, err
+}
+
+// audioStatus returns the status of the audio player id.
+func (p *Player) audioStatus(ctx context.Context, id int) (*Status, error) {
 	var item struct {
 		Item struct {
-			Title  string   `json:"title"`
-			Label  string   `json:"label"`
-			Artist []string `json:"artist"`
-			Album  string   `json:"album"`
+			ID      int      `json:"id"`
+			AlbumID int      `json:"albumid"`
+			Title   string   `json:"title"`
+			Label   string   `json:"label"`
+			Artist  []string `json:"artist"`
+			Album   string   `json:"album"`
 		} `json:"item"`
 	}
-	err = p.client.Call(ctx, "Player.GetItem", map[string]any{
-		"playerid": id, "properties": []string{"title", "artist", "album"},
+	err := p.client.Call(ctx, "Player.GetItem", map[string]any{
+		"playerid": id, "properties": []string{"title", "artist", "album", "albumid"},
 	}, &item)
 	if err != nil {
 		return nil, err
@@ -295,6 +324,8 @@ func (p *Player) NowPlaying(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	status := &Status{
+		SongID:   item.Item.ID,
+		AlbumID:  item.Item.AlbumID,
 		Artist:   strings.Join(item.Item.Artist, ", "),
 		Title:    cmp.Or(item.Item.Title, item.Item.Label),
 		Album:    item.Item.Album,

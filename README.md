@@ -32,19 +32,18 @@ as Kodi does.
 
 ## Install
 
-The current release is **v0.0.4**.
-
 ```sh
-go install github.com/pswies/kodipilot/cmd/kodipilot@v0.0.4
+go install github.com/pswies/kodipilot/cmd/kodipilot@latest
 ```
 
-The [release](https://github.com/pswies/kodipilot/releases/tag/v0.0.4) has
+The [latest release](https://github.com/pswies/kodipilot/releases/latest) has
 binaries for Linux and macOS (amd64 and arm64), `.deb` packages and checksums.
-On a Debian or Ubuntu Kodi box, for example a Raspberry Pi:
+On a Debian or Ubuntu Kodi box, for example a Raspberry Pi, download the `.deb`
+for your architecture (`kodipilot_<version>_linux_arm64.deb` on a Pi) and
+install it:
 
 ```sh
-curl -LO https://github.com/pswies/kodipilot/releases/download/v0.0.4/kodipilot_0.0.4_linux_arm64.deb
-sudo apt install ./kodipilot_0.0.4_linux_arm64.deb
+sudo apt install ./kodipilot_*_linux_arm64.deb
 ```
 
 Homebrew: coming soon.
@@ -84,6 +83,7 @@ The web server sends the password in clear text, so keep to a trusted network.
 | `--transport` |                      | `transport` | `tcp` for a loopback host, `http` otherwise |
 | `--user`      | `KODIPILOT_USER`     | `user`      | `kodi` (http only)                          |
 |               | `KODIPILOT_PASSWORD` | `password`  | asked for (http only)                       |
+| `--art`       | `KODIPILOT_ART`      | `art`       | `symbols`                                   |
 
 Flags override the environment, which overrides the config file,
 `~/.config/kodipilot/config.toml` (or `$XDG_CONFIG_HOME/kodipilot/config.toml`):
@@ -94,7 +94,7 @@ user = "kodi"
 password = "secret" # keep the file private: chmod 600 config.toml
 ```
 
-`--art` sets how images are drawn: `symbols` (the default), `blocks` for fonts
+`art` sets how images are drawn: `symbols` (the default), `blocks` for fonts
 without the sextant characters (U+1FB00–U+1FB3B), `ascii`, or `off`.
 
 kodipilot warns when a config file with a password is readable by others.
@@ -113,13 +113,14 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | Home / End | first / last row | same |
 | Tab | switch Library ⇄ Queue | Tab |
 | Space | pause / resume | Space |
-| x | stop | X |
+| x | stop | x |
 | . / , | next / previous track | . / , |
 | shift+← / shift+→ | seek back / forward | ← / → |
 | + = / - | volume up / down by 5% | + = / - |
 | F8, m | mute on / off | F8 |
 | r | repeat: off → all → one → off | — |
 | s | shuffle on / off | — |
+| F5, ctrl+r | reload the library | — |
 | ? / h | this help | — |
 | Q, ctrl+c | quit (the music keeps playing) | — |
 
@@ -127,7 +128,7 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 
 | Key | Action | Kodi |
 |---|---|---|
-| i | show / hide (full screen when narrow) | I |
+| i | show / hide (full screen when narrow) | i |
 | [ / ] | scroll the details | — |
 
 **Library**
@@ -136,14 +137,14 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 |---|---|---|
 | Enter, → | open; on a track: play its album from there | Enter |
 | ←, Backspace, Esc | back (Esc at the top quits) | Backspace, Esc |
-| p | play now: artist, album, or from a track | P |
-| q | add to the queue | Q |
+| p | play now: artist, album, or from a track | p |
+| q | add to the queue | q |
 
 **Queue**
 
 | Key | Action | Kodi |
 |---|---|---|
-| Enter, p | play the selected item | Enter, P |
+| Enter, p | play the selected item | Enter, p |
 | ← / → | seek back / forward | ← / → |
 | Delete, d | remove the selected item | Delete |
 | shift+↑ / ↓, K / J | move the selected item up / down | — |

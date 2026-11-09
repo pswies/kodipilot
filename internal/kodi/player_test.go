@@ -197,6 +197,7 @@ func TestNowPlayingAndQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := kodi.Status{
+		SongID: 102, AlbumID: 11, Album: "Ambient 1",
 		Artist: "Brian Eno", Title: "2/1", Elapsed: 3*time.Minute + 12*time.Second, Total: 535 * time.Second,
 		Position: 1, Count: 4, Repeat: "all", Shuffled: true,
 	}
@@ -369,4 +370,21 @@ func TestSwapAndClear(t *testing.T) {
 		`Playlist.Swap {"playlistid":0,"position1":1,"position2":2}`,
 		`Playlist.Clear {"playlistid":0}`,
 	)
+}
+
+func TestPlayingVideo(t *testing.T) {
+	player, _, _ := startPlayer(t, false, true)
+	status, video, err := player.Playing(ctx(t))
+	if status != nil || !video || err != nil {
+		t.Errorf("Playing = %v, %v, %v; want only video", status, video, err)
+	}
+}
+
+func TestGetItemRequest(t *testing.T) {
+	player, music, _ := startPlayer(t, true, false)
+	player.NowPlaying(ctx(t))
+	want := koditest.Call{Method: "Player.GetItem", Params: `{"playerid":0,"properties":["title","artist","album","albumid"]}`}
+	if !slices.Contains(music.Calls(), want) {
+		t.Errorf("calls = %v, want %v", music.Calls(), want)
+	}
 }

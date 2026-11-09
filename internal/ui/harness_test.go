@@ -97,7 +97,7 @@ var keyBytes = map[string]string{
 	"shift+up": "\x1b[1;2A", "shift+down": "\x1b[1;2B", "shift+right": "\x1b[1;2C", "shift+left": "\x1b[1;2D",
 	"pgup": "\x1b[5~", "pgdown": "\x1b[6~", "home": "\x1b[H", "end": "\x1b[F",
 	"delete": "\x1b[3~", "f8": "\x1b[19~", "enter": "\r", "tab": "\t", "shift+tab": "\x1b[Z",
-	"backspace": "\x7f", "esc": "\x1b", "space": " ", "ctrl+c": "\x03",
+	"backspace": "\x7f", "esc": "\x1b", "space": " ", "ctrl+c": "\x03", "f5": "\x1b[15~", "ctrl+r": "\x12",
 }
 
 // decodeKey decodes terminal input into the key message Bubble Tea would

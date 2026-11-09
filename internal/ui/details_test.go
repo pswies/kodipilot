@@ -310,7 +310,7 @@ func TestLongTextFlowsUnderImage(t *testing.T) {
 		switch {
 		case y < rows && strings.HasPrefix(beside(l, art), "Żywiołak is a Polish folk band"):
 			besideText = true // the biography starts beside the image…
-		case y >= rows && ansi.StringWidth(strings.TrimRight(l, " ")) > 1+art+besideGap+40 && l[1] != ' ':
+		case y >= rows && ansi.StringWidth(strings.TrimRight(l, " ")) > 60 && l[1] != ' ':
 			belowWide = true // …and continues under it at the full width
 		}
 	}
@@ -339,7 +339,7 @@ func TestStackedWhenNarrow(t *testing.T) {
 
 func TestDetailsScroll(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "")
-	h.want("Space pause  +/- volume") // Brian Eno fits: no scroll hint
+	h.want("Space pause  Tab queue") // Brian Eno fits: no scroll hint
 	h.wantNot("[ ] scroll", "more  ]")
 	h.press("down", "down") // Żywiołak's long biography
 	h.advance(detailsDelay)

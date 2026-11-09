@@ -2,7 +2,9 @@ package ui
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -10,6 +12,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/pswies/kodipilot/internal/kodi"
 )
 
 // View renders the screen: a header, the list, the status line and the
@@ -73,7 +77,9 @@ func (m *Model) header(w int) string {
 	t := m.theme
 	var crumbs []string
 	var right string
-	if m.view == queueView {
+	if m.view == queueView && m.offline && len(m.queue) > 0 {
+		right = "last known queue · Kodi unreachable"
+	} else if m.view == queueView {
 		right = m.queueSummary()
 	} else if l := m.current(); l != nil {
 		for _, level := range m.levels {
@@ -156,8 +162,12 @@ func (m *Model) body(w, height int) []string {
 	t := m.theme
 	rows := make([]string, 0, height)
 	note := func(text string, style lipgloss.Style) {
-		if len(rows) < height {
-			rows = append(rows, line(w, t.plain, []span{{"  " + text, style}}, nil))
+		f := flow{room: func(int) int { return max(1, w-4) }}
+		f.text(text, []span{{"  ", t.plain}}, style)
+		for _, l := range f.lines {
+			if len(rows) < height {
+				rows = append(rows, line(w, t.plain, l, nil))
+			}
 		}
 	}
 	switch l := m.current(); {
@@ -168,13 +178,27 @@ func (m *Model) body(w, height int) []string {
 		for i := c.top; i < min(len(m.queue), c.top+height); i++ {
 			rows = append(rows, m.queueRow(w, i, i == c.index))
 		}
+	case l == nil && errors.Is(m.waitErr, kodi.ErrUnauthorized):
+		note(errorText(m.waitErr), t.err)
 	case l == nil:
-		note("waiting for Kodi…", t.dim)
+		note("Waiting for Kodi…", t.dim)
 		if m.waitErr != nil {
-			note(errorText(m.waitErr), t.err)
+			note(errorText(m.waitErr)+" Retrying…", t.err)
 		}
+	case l.len() == 0 && l.kind == artistsLevel:
+		note("Kodi's music library has no album artists yet. Scan your music in Kodi, then restart.", t.dim)
+	case l.len() == 0 && l.kind == tracksLevel:
+		note("No tracks.", t.dim)
 	case l.len() == 0:
-		note("(empty)", t.dim)
+		note("No albums.", t.dim)
+	case l.rows != nil: // tracks of several discs, with a row before each disc
+		for _, r := range l.rows[min(l.list.top, len(l.rows)):min(len(l.rows), l.list.top+height)] {
+			if r < 0 {
+				rows = append(rows, line(w, t.plain, []span{{"  Disc " + strconv.Itoa(-r), t.dim}}, nil))
+			} else {
+				rows = append(rows, m.libraryRow(w, l, r, r == l.list.index))
+			}
+		}
 	default:
 		for i := l.list.top; i < min(l.len(), l.list.top+height); i++ {
 			rows = append(rows, m.libraryRow(w, l, i, i == l.list.index))
@@ -208,14 +232,22 @@ func (m *Model) libraryRow(w int, l *level, i int, selected bool) string {
 		if album.Year > 0 {
 			year = fmt.Sprintf("%4d", album.Year)
 		}
-		return line(w, base, []span{gutter, {year + "  ", t.dim}, {album.Title, t.plain}}, nil)
+		var playing []span
+		if m.status != nil && m.status.AlbumID == album.ID {
+			playing = []span{{"▶ ", t.dim}}
+		}
+		return line(w, base, []span{gutter, {year + "  ", t.dim}, {album.Title, t.plain}}, playing)
 	default:
 		song := l.songs[i]
 		number := "   "
 		if song.Track > 0 {
 			number = fmt.Sprintf("%02d ", song.Track)
 		}
-		left := []span{gutter, {number + " ", t.dim}, {song.Title, t.plain}}
+		mark, title := span{"  ", t.plain}, t.plain
+		if m.status != nil && m.status.SongID == song.ID {
+			mark, title = span{m.playIcon() + " ", t.accent}, t.strong
+		}
+		left := []span{gutter, mark, {number + " ", t.dim}, {song.Title, title}}
 		if song.DisplayArtist != "" && song.DisplayArtist != l.album.DisplayArtist {
 			left = append(left, span{"  · " + song.DisplayArtist, t.dim})
 		}
@@ -229,11 +261,11 @@ func (m *Model) queueRow(w, i int, selected bool) string {
 	base, gutter := m.rowBase(selected)
 	item := m.queue[i]
 	mark, title := span{"  ", t.plain}, t.plain
-	if i == m.playingPosition() {
-		mark, title = span{"▶ ", t.accent}, t.strong
-		if m.status.Paused {
-			mark.text = "⏸ "
-		}
+	switch {
+	case m.offline: // the last known queue, perhaps stale
+		title = t.dim
+	case i == m.playingPosition():
+		mark, title = span{m.playIcon() + " ", t.accent}, t.strong
 	}
 	digits := len(strconv.Itoa(len(m.queue)))
 	left := []span{gutter, mark, {fmt.Sprintf("%*d  ", digits, i+1), t.dim}, {item.Title, title}}
@@ -243,25 +275,45 @@ func (m *Model) queueRow(w, i int, selected bool) string {
 	return line(w, base, left, []span{{formatDuration(item.Duration) + " ", t.dim}})
 }
 
+// playIcon is ▶ or, when paused, ⏸.
+func (m *Model) playIcon() string {
+	if m.status != nil && m.status.Paused {
+		return "⏸"
+	}
+	return "▶"
+}
+
+// statusLine shows what plays: "▶ 03:12/08:55  Artist – Title · Album
+// [2/4]", the album dropped first when narrow.
 func (m *Model) statusLine(w int) string {
 	t := m.theme
 	s := m.status
-	if s == nil {
+	switch {
+	case m.offline:
+		return line(w, t.plain, []span{{" ■ Kodi unreachable, retrying…", t.err}}, nil)
+	case s == nil && m.video:
+		return line(w, t.plain, []span{{" ■ video playing", t.dim}}, m.indicators())
+	case s == nil:
 		return line(w, t.plain, []span{{" ■ stopped", t.dim}}, m.indicators())
 	}
-	icon := "▶"
-	if s.Paused {
-		icon = "⏸"
+	compose := func(album bool) []span {
+		spans := []span{{fmt.Sprintf(" %s %s/%s", m.playIcon(), formatDuration(s.Elapsed), formatDuration(s.Total)), t.accent}}
+		if name := strings.Join(nonEmpty(s.Artist, s.Title), " – "); name != "" {
+			spans = append(spans, span{"  " + name, t.accent})
+		}
+		if album && s.Album != "" {
+			spans = append(spans, span{" · " + s.Album, t.dim})
+		}
+		if s.Position >= 0 && s.Count > 0 {
+			spans = append(spans, span{fmt.Sprintf("  [%d/%d]", s.Position+1, s.Count), t.dim})
+		}
+		return spans
 	}
-	left := []span{{fmt.Sprintf(" %s %s/%s", icon, formatDuration(s.Elapsed), formatDuration(s.Total)), t.accent}}
-	name := strings.Join(nonEmpty(s.Artist, s.Title), " – ")
-	if name != "" {
-		left = append(left, span{"  " + name, t.accent})
+	left, right := compose(true), m.indicators()
+	if spansWidth(left)+spansWidth(right)+2 > w {
+		left = compose(false)
 	}
-	if s.Position >= 0 && s.Count > 0 {
-		left = append(left, span{fmt.Sprintf("  [%d/%d]", s.Position+1, s.Count), t.dim})
-	}
-	return line(w, t.plain, left, m.indicators())
+	return line(w, t.plain, left, right)
 }
 
 // indicators are the status line's compact marks for repeat, shuffle and
@@ -285,6 +337,8 @@ func (m *Model) indicators() []span {
 	return []span{{strings.Join(marks, "  ") + " ", m.theme.accent}}
 }
 
+// footer shows a flashed message or the key hints of the view. Hints that
+// do not fit are dropped whole, from the end.
 func (m *Model) footer(w int) string {
 	t := m.theme
 	if m.flash != "" && m.clock.Now().Before(m.flashUntil) {
@@ -292,13 +346,31 @@ func (m *Model) footer(w int) string {
 		if m.flashErr {
 			style = t.err
 		}
-		return line(w, t.plain, []span{{" " + m.flash, style}}, nil)
+		return line(w, t.plain, []span{{" " + sentence(m.flash), style}}, nil)
 	}
-	hint := footerHint
+	hints := m.hints()
+	for len(hints) > 1 && width(" "+strings.Join(hints, "  ")) > w {
+		hints = hints[:len(hints)-1]
+	}
+	return line(w, t.plain, []span{{" " + strings.Join(hints, "  "), t.dim}}, nil)
+}
+
+// hints returns the key hints for the footer.
+func (m *Model) hints() []string {
+	var hints []string
+	switch {
+	case m.fullDetails():
+		hints = []string{"Esc close"}
+	case m.view == queueView:
+		hints = []string{"? help", "Enter play", "d remove", "J/K move", "c clear", "Tab library", "Q quit"}
+	default:
+		hints = []string{"? help", "Enter open", "p play", "q add", "Space pause", "Tab queue", "Q quit"}
+	}
 	if m.detailsOverflow() {
-		hint = footerScrollHint
+		at := max(len(hints)-1, 1) // before "Q quit"
+		hints = slices.Insert(hints, at, "[ ] scroll")
 	}
-	return line(w, t.plain, []span{{" " + hint, t.dim}}, nil)
+	return hints
 }
 
 // popup returns the help, the clear-the-queue question or the volume
