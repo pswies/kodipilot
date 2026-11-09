@@ -105,3 +105,51 @@ func TestLibrarySongsCached(t *testing.T) {
 		t.Errorf("GetSongs called %d times, want 1", n)
 	}
 }
+
+func TestDetailsRequests(t *testing.T) {
+	lib, music := loadLibrary(t)
+	music.SetCover("/pub/a b/cover.jpg")
+	music.Reset()
+	artist, err := lib.ArtistDetails(ctx(t), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	album, err := lib.AlbumDetails(ctx(t), 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	song, err := lib.SongDetails(ctx(t), 102)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []koditest.Call{
+		{Method: "AudioLibrary.GetArtistDetails", Params: `{"artistid":1,"properties":["description","genre","style","born","formed","yearsactive","thumbnail","fanart","art"]}`},
+		{Method: "AudioLibrary.GetAlbumDetails", Params: `{"albumid":11,"properties":["title","displayartist","description","genre","style","mood","albumlabel","year","releasetype","albumduration","totaldiscs","thumbnail","art"]}`},
+		{Method: "AudioLibrary.GetSongDetails", Params: `{"properties":["title","artist","album","year","genre","duration","track","disc","rating","userrating","playcount","lastplayed","comment","lyrics","file","bitrate","samplerate","channels","displaycomposer","mood","thumbnail","art"],"songid":102}`},
+	}
+	if got := music.Calls(); !slices.Equal(got, want) {
+		t.Errorf("calls:\n%v\nwant:\n%v", got, want)
+	}
+	cover := "image://%2Fpub%2Fa%20b%2Fcover.jpg/"
+	if artist.Born != "1948-05-15" || artist.Image() != cover {
+		t.Errorf("artist = %+v", artist)
+	}
+	if album.Label != "Polydor" || album.Duration != 2628 || album.Image() != cover {
+		t.Errorf("album = %+v", album)
+	}
+	if song.SampleRate != 44100 || song.Composer != "Brian Eno" || song.Image() != cover {
+		t.Errorf("song = %+v", song)
+	}
+}
+
+func TestDetailsImageFallbacks(t *testing.T) {
+	if got := (kodi.AlbumDetails{Thumbnail: "t"}).Image(); got != "t" {
+		t.Errorf("album thumbnail fallback = %q", got)
+	}
+	if got := (kodi.SongDetails{Art: map[string]string{"thumb": "s"}, Thumbnail: "t"}).Image(); got != "s" {
+		t.Errorf("song art = %q", got)
+	}
+	if got := (kodi.ArtistDetails{}).Image(); got != "" {
+		t.Errorf("no image = %q", got)
+	}
+}

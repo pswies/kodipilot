@@ -27,7 +27,7 @@ func waitingHarness(t *testing.T) *harness {
 	music := koditest.NewMusic()
 	music.Handle("AudioLibrary.GetArtists", unavailable)
 	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
-	h.m = New(music, h.clock)
+	h.m = New(music, h.clock, Options{})
 	h.send(tea.WindowSizeMsg{Width: 80, Height: 10})
 	h.run(h.m.Init())
 	return h

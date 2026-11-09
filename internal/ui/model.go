@@ -17,6 +17,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
+	"github.com/pswies/kodipilot/internal/art"
+	"github.com/pswies/kodipilot/internal/artwork"
 	"github.com/pswies/kodipilot/internal/kodi"
 )
 
@@ -76,8 +78,18 @@ func (c *cursor) scroll(height, n int) {
 	c.top = max(0, min(c.top, n-height))
 }
 
+// Options configure a Model.
+type Options struct {
+	// Images loads cover art and artist images for the details pane; nil
+	// shows none.
+	Images *artwork.Loader
+	// Art is how images are drawn (when the terminal has colours).
+	Art art.Mode
+}
+
 // Model is the Bubble Tea model of kodipilot.
 type Model struct {
+	opts   Options
 	client kodi.Client
 	player *kodi.Player
 	clock  Clock
@@ -91,6 +103,15 @@ type Model struct {
 	helpOpen      bool
 	helpTop       int  // the first help line shown
 	confirmClear  bool // asking whether to clear the queue
+	paneHidden    bool // the user hid the details pane
+	detailsFull   bool // the details fill the screen (when the pane does not fit)
+
+	info            map[itemKey]*details // fetched details
+	detailsKey      itemKey              // the item the details follow
+	detailsSequence int                  // identifies the one details timer that counts
+	artPending      map[string]bool      // images being rendered
+	artFailed       map[string]bool      // art URLs without an image
+	hadImage        bool                 // the last details shown had an image
 
 	lib     *kodi.Library // nil while waiting for Kodi
 	waitErr error         // why Kodi is not there yet
@@ -113,8 +134,12 @@ type Model struct {
 }
 
 // New returns a model that talks to Kodi through client.
-func New(client kodi.Client, clock Clock) *Model {
+func New(client kodi.Client, clock Clock, opts Options) *Model {
 	m := &Model{
+		opts:        opts,
+		info:        make(map[itemKey]*details),
+		artPending:  make(map[string]bool),
+		artFailed:   make(map[string]bool),
 		client:      client,
 		keys:        keyTable(),
 		player:      kodi.NewPlayer(client),
@@ -169,7 +194,7 @@ func (m *Model) Init() tea.Cmd {
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmd := m.update(msg)
 	m.scroll()
-	return m, cmd
+	return m, tea.Batch(cmd, m.followDetails())
 }
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
@@ -212,6 +237,20 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			flash = m.showInfo(msg.info)
 		}
 		return tea.Batch(flash, m.refresh())
+	case detailsDueMsg:
+		if msg.sequence == m.detailsSequence {
+			return m.fetchDetails()
+		}
+	case detailsMsg:
+		if msg.err != nil {
+			return m.showError(msg.err)
+		}
+		m.info[msg.key] = msg.details // cached by id, whether still highlighted or not
+	case artMsg:
+		delete(m.artPending, msg.pending)
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) && !errors.Is(msg.err, context.DeadlineExceeded) {
+			m.artFailed[msg.url] = true
+		}
 	case volumeMsg:
 		if msg.err != nil {
 			return m.showError(msg.err)
@@ -231,6 +270,9 @@ func (m *Model) key(key string) tea.Cmd {
 		return nil
 	case m.confirmClear:
 		return m.confirmKey(key)
+	case m.fullDetails() && (key == "esc" || key == "left"):
+		m.detailsFull = false
+		return nil
 	}
 	if do := handler(m.keys, m.view, key); do != nil {
 		return do(m)

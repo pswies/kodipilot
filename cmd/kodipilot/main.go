@@ -9,11 +9,14 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 	"golang.org/x/term"
 
+	"github.com/pswies/kodipilot/internal/art"
+	"github.com/pswies/kodipilot/internal/artwork"
 	"github.com/pswies/kodipilot/internal/config"
 	"github.com/pswies/kodipilot/internal/kodi"
 	"github.com/pswies/kodipilot/internal/ui"
@@ -32,6 +35,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	var flags config.Settings
 	var showVersion bool
+	var artFlag string
 	fs := flag.NewFlagSet("kodipilot", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {} // --help prints the usage to stdout below; errors say how to get it
@@ -39,6 +43,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.IntVar(&flags.Port, "port", 0, "")
 	fs.StringVar(&flags.Transport, "transport", "", "")
 	fs.StringVar(&flags.User, "user", "", "")
+	fs.StringVar(&artFlag, "art", "symbols", "")
 	fs.BoolVar(&showVersion, "version", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -50,6 +55,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	switch {
 	case fs.NArg() > 0:
 		return fmt.Errorf("unexpected argument %q; see kodipilot --help", fs.Arg(0))
+	case !slices.Contains([]string{"symbols", "blocks", "ascii", "off"}, artFlag):
+		return fmt.Errorf("--art=%s: want symbols, blocks, ascii or off", artFlag)
 	case showVersion:
 		fmt.Fprintln(stdout, "kodipilot", buildVersion())
 		return nil
@@ -72,9 +79,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var client kodi.Client
+	images := artwork.Config{UserAgent: "kodipilot/" + buildVersion()}
 	switch cfg.Transport {
 	case config.HTTP:
 		client = kodi.NewHTTPClient(cfg.URL(), cfg.User, cfg.Password)
+		images.KodiURL, images.User, images.Password = "http://"+cfg.Addr(), cfg.User, cfg.Password
 	default:
 		tcp := kodi.NewTCPClient(cfg.Addr())
 		defer tcp.Close()
@@ -85,7 +94,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if os.Getenv("NO_COLOR") != "" { // https://no-color.org: any value
 		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
 	}
-	_, err = tea.NewProgram(ui.New(client, ui.SystemClock{}), opts...).Run()
+	uiOpts := ui.Options{Art: map[string]art.Mode{"symbols": art.Symbols, "blocks": art.Blocks, "ascii": art.ASCII}[artFlag]}
+	if artFlag != "off" {
+		uiOpts.Images = artwork.NewLoader(images)
+	}
+	_, err = tea.NewProgram(ui.New(client, ui.SystemClock{}, uiOpts), opts...).Run()
 	return err
 }
 
@@ -128,6 +141,8 @@ Flags:
   --transport T      tcp (Kodi's JSON-RPC socket) or http (Kodi's web server);
                      default: tcp for a loopback host, http otherwise
   --user USER        web server user (default %s)
+  --art MODE         images in the details pane: symbols (default), blocks
+                     (for fonts without sextants), ascii or off
   --version          print the version
   --help             print this help
 

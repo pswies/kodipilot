@@ -48,7 +48,7 @@ func newHarness(t *testing.T, width, height int) *harness {
 		kodi:  koditest.NewMusic(),
 		clock: &fakeClock{now: time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)},
 	}
-	h.m = New(h.kodi, h.clock)
+	h.m = New(h.kodi, h.clock, Options{})
 	h.send(tea.WindowSizeMsg{Width: width, Height: height})
 	h.run(h.m.Init())
 	return h
