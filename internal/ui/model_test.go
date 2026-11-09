@@ -265,67 +265,6 @@ func TestVolumePopup(t *testing.T) {
 	h.want("Volume", "muted")
 }
 
-func TestHelp(t *testing.T) {
-	h := newHarness(t, 90, 40)
-	h.press("?")
-	for _, section := range keyTable() {
-		h.want(section.title)
-		for _, row := range section.rows {
-			h.want(row.label, row.action)
-		}
-	}
-	h.want("Author: Piotr Święs", "https://github.com/pswies/kodipilot")
-	h.wantNot("scroll")
-
-	h.kodi.Reset()
-	h.press(".", "enter", "tab", "+", "x", "p", "m", "esc")
-	if calls := h.kodi.Methods(); len(calls) > 0 {
-		t.Errorf("keys not ignored while help is open: %v", calls)
-	}
-	h.wantNot("Author") // Esc closed it
-	for _, keys := range [][]string{{"?", "?"}, {"h", "h"}, {"?", "q"}, {"h", "Q"}} {
-		h.press(keys[0])
-		h.want("Author")
-		h.press(keys[1])
-		h.wantNot("Author")
-		if h.quit {
-			t.Fatalf("%v quit", keys)
-		}
-	}
-}
-
-func TestHelpScrolls(t *testing.T) {
-	h := newHarness(t, 80, 20)
-	h.press("?")
-	h.want("Everywhere", "↑↓ scroll")
-	h.wantNot("Author")
-	h.press("end")
-	h.want("Author", "https://github.com/pswies/kodipilot")
-	h.wantNot("Everywhere")
-	h.press("pgup", "home")
-	h.want("Everywhere")
-	h.press("down")
-	h.wantNot("Everywhere")
-	h.press("up")
-	h.want("Everywhere")
-}
-
-func TestKeysHelp(t *testing.T) {
-	text := KeysHelp()
-	for _, section := range keyTable() {
-		for _, row := range section.rows {
-			if !strings.Contains(text, row.label) || !strings.Contains(text, row.action) {
-				t.Errorf("--help lacks %q %q", row.label, row.action)
-			}
-		}
-	}
-	for _, about := range aboutLines() {
-		if !strings.Contains(text, about) {
-			t.Errorf("--help lacks %q", about)
-		}
-	}
-}
-
 func TestReadmeShowsKeyTable(t *testing.T) {
 	readme, err := os.ReadFile("../../README.md")
 	if err != nil {

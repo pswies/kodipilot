@@ -387,11 +387,37 @@ func globalTime(seconds int) map[string]int {
 	return map[string]int{"hours": seconds / 3600, "minutes": seconds / 60 % 60, "seconds": seconds % 60}
 }
 
-// artistDetails knows a lot about Brian Eno and nothing about the others.
+// LongBiography is Żywiołak's biography: long enough to scroll.
+const LongBiography = "Żywiołak is a Polish folk band founded in 2005, playing music inspired by " +
+	"Slavic traditions on hurdy-gurdy, fiddle, bagpipes and frame drums.\n\n" +
+	"The band draws on old ritual songs, which it arranges with drones and heavy rhythms. " +
+	"Its concerts are known for their trance-like energy, and the musicians wear costumes " +
+	"made after historical patterns.\n\n" +
+	"Over the years the line-up has changed several times, but the sound has stayed recognisable: " +
+	"the hurdy-gurdy leads, the voices answer, and the drums carry everything forward. " +
+	"The band has played at festivals across Europe, from small village gatherings to large stages.\n\n" +
+	"Its albums mix studio recordings with live sessions. Critics praise the attention to detail " +
+	"in the arrangements and the way old melodies meet modern production.\n\n" +
+	"Before founding the band, its members played in early-music ensembles and studied " +
+	"ethnography, collecting songs in villages where the old repertoire was still sung at weddings, " +
+	"harvests and funerals. Much of that material found its way onto the first recordings.\n\n" +
+	"The instruments are built or restored by the musicians themselves: hurdy-gurdies after " +
+	"medieval drawings, bagpipes from goat skin, drums stretched with rawhide. Each one has a " +
+	"voice of its own, and the band likes to let them speak before the singing begins.\n\n" +
+	"In interviews the musicians say they do not try to reconstruct the past. They want the old " +
+	"songs to sound as alive today as they once did around a fire, loud and a little wild, and " +
+	"meant for dancing rather than for listening in silence.\n\n" +
+	"The last paragraph ends here."
+
+// artistDetails knows a lot about Brian Eno, has a long biography of
+// Żywiołak and knows nothing about David Byrne.
 func (m *Music) artistDetails(raw json.RawMessage) any {
 	var p struct{ ArtistID int }
 	json.Unmarshal(raw, &p)
 	d := map[string]any{"artistid": p.ArtistID, "label": "", "genre": []string{}, "art": map[string]string{}}
+	if p.ArtistID == 4 {
+		d["description"] = LongBiography
+	}
 	if p.ArtistID == 1 {
 		d["description"] = "English musician, composer and record producer.\n\nA pioneer of ambient music."
 		d["genre"] = []string{"Ambient", "Electronic"}

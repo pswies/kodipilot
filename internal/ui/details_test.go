@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/pswies/kodipilot/internal/artwork"
@@ -209,8 +210,10 @@ func TestCover(t *testing.T) {
 	if len(plain) != pane+1+list || plain[pane] != '│' || !strings.HasPrefix(string(plain[pane+1:]), "▌ Brian Eno") {
 		t.Errorf("row %q: want the pane in %d columns, │, then the list", string(plain), pane)
 	}
-	// The text below the image starts at the same edge.
-	h.want("\n Brian Eno")
+	// The text is beside the image, two columns right of it.
+	if art := artColumns(h); !strings.HasPrefix(string(plain[1+art:]), "  Brian Eno") || art < 10 {
+		t.Errorf("row %q: want the title beside the image", string(plain))
+	}
 }
 
 func TestMissingCover(t *testing.T) {
@@ -237,25 +240,191 @@ func TestPlaceholder(t *testing.T) {
 	}
 }
 
-func TestLongTextCut(t *testing.T) {
-	h := detailsHarness(t, 120, 16, "")
-	h.press("enter", "down", "enter", "down")
-	h.advance(detailsDelay)
-	screen := strings.Join(h.screen(), "\n")
-	if !strings.Contains(screen, "…") {
-		t.Errorf("long details not cut with …:\n%s", screen)
+// docLines returns the details document as plain lines.
+func docLines(h *harness) []string {
+	w, height := h.m.paneSize()
+	var out []string
+	for _, l := range h.m.detailsDoc(w+2, height) {
+		out = append(out, ansi.Strip(l))
+	}
+	return out
+}
+
+// artColumns returns the width of the image at the top of the document.
+func artColumns(h *harness) int {
+	w, height := h.m.paneSize()
+	cols, rows, _ := h.m.artBox(h.m.shown(), w, height)
+	s, ok := h.m.cachedArt(h.m.shown().image, cols, rows)
+	if !ok {
+		h.t.Fatal("the image is not rendered")
+	}
+	return ansi.StringWidth(strings.Split(s, "\n")[0])
+}
+
+// beside returns the text of a document line right of the image.
+func beside(l string, art int) string {
+	r := []rune(l)
+	return string(r[min(len(r), 1+art+besideGap):])
+}
+
+func TestTextBesideImage(t *testing.T) {
+	h := detailsHarness(t, 170, 45, writeCover(t)) // Brian Eno, with an image
+	if _, pane := h.m.layout(); pane != 127 {
+		t.Fatalf("pane %d, want 127", pane)
+	}
+	art := artColumns(h)
+	lines := docLines(h)
+	if !strings.HasPrefix(beside(lines[0], art), "Brian Eno") {
+		t.Errorf("title not beside the image: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "Genre   Ambient, Electronic") {
+		t.Errorf("fields not beside the image: %q", lines[1])
+	}
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > 127 {
+			t.Errorf("line %q is %d wide", l, w)
+		}
 	}
 }
 
-func TestWrap(t *testing.T) {
-	got := wrap("one two three four\n\n\nfive\tsix", 9)
+func TestLongTextFlowsUnderImage(t *testing.T) {
+	music := koditest.NewMusic()
+	cover := writeCover(t)
+	music.SetCover(cover)
+	music.Reply("AudioLibrary.GetArtistDetails", map[string]any{"artistdetails": map[string]any{
+		"description": koditest.LongBiography + "\n\n" + koditest.LongBiography,
+		"art":         map[string]string{"thumb": "image://" + strings.ReplaceAll(cover, "/", "%2f") + "/"},
+	}})
+	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
+	h.m = New(music, h.clock, Options{Images: artwork.NewLoader(artwork.Config{})})
+	h.send(tea.WindowSizeMsg{Width: 170, Height: 45})
+	h.run(h.m.Init())
+	h.advance(detailsDelay)
+
+	art := artColumns(h)
+	lines := docLines(h)
+	_, height := h.m.paneSize()
+	rows := height * artShare / 100
+	besideText, belowWide := false, false
+	for y, l := range lines {
+		switch {
+		case y < rows && strings.HasPrefix(beside(l, art), "Żywiołak is a Polish folk band"):
+			besideText = true // the biography starts beside the image…
+		case y >= rows && ansi.StringWidth(strings.TrimRight(l, " ")) > 1+art+besideGap+40 && l[1] != ' ':
+			belowWide = true // …and continues under it at the full width
+		}
+	}
+	if !besideText || !belowWide {
+		t.Errorf("beside %v, below at full width %v:\n%s", besideText, belowWide, strings.Join(lines, "\n"))
+	}
+}
+
+func TestStackedWhenNarrow(t *testing.T) {
+	h := detailsHarness(t, 90, 30, writeCover(t)) // a 57-column pane
+	art, lines := artColumns(h), docLines(h)
+	_, height := h.m.paneSize()
+	rows := height * artShare / 100
+	if inner, _ := h.m.paneSize(); inner-art-besideGap >= besideMin {
+		t.Fatalf("room beside the image: %d columns", inner-art-besideGap)
+	}
+	for y := range rows {
+		if strings.Contains(lines[y], "Brian Eno") {
+			t.Errorf("text beside the image on line %d: %q", y, lines[y])
+		}
+	}
+	if got := strings.TrimRight(lines[rows+1], " "); got != " Brian Eno" {
+		t.Errorf("first text line %q, want the title under the image", got)
+	}
+}
+
+func TestDetailsScroll(t *testing.T) {
+	h := detailsHarness(t, 120, 30, "")
+	h.want("Space pause  +/- volume") // Brian Eno fits: no scroll hint
+	h.wantNot("[ ] scroll", "more  ]")
+	h.press("down", "down") // Żywiołak's long biography
+	h.advance(detailsDelay)
+	_, height := h.m.paneSize()
+	pane := func() []string {
+		var out []string
+		for _, l := range h.screen()[1 : 1+height] {
+			out = append(out, strings.TrimRight(strings.Split(l, "│")[0], " "))
+		}
+		return out
+	}
+	first, last := func() string { return pane()[0] }, func() string { return pane()[height-1] }
+	h.want("[ ] scroll")
+	if !strings.HasSuffix(last(), "↓ more  ]") || strings.Contains(first(), "↑ more") {
+		t.Errorf("at the top: first %q, last %q", first(), last())
+	}
+
+	h.press("]")
+	if want := min(height/2, len(docLines(h))-height); h.m.detailsTop != want || want < 2 {
+		t.Errorf("] scrolled to %d, want %d", h.m.detailsTop, want)
+	}
+	if !strings.HasSuffix(first(), "↑ more  [") {
+		t.Errorf("scrolled: first %q", first())
+	}
+	for range 20 {
+		h.press("]")
+	}
+	if doc := docLines(h); h.m.detailsTop != len(doc)-height {
+		t.Errorf("at the bottom: top %d, want %d", h.m.detailsTop, len(doc)-height)
+	}
+	if strings.Contains(last(), "↓ more") || !strings.Contains(strings.Join(pane(), " "), "The last paragraph ends here.") {
+		t.Errorf("the end is not shown: %q", pane())
+	}
+	h.wantNot("…")
+	for range 20 {
+		h.press("[")
+	}
+	if h.m.detailsTop != 0 || strings.Contains(first(), "↑ more") {
+		t.Errorf("at the top again: top %d, first %q", h.m.detailsTop, first())
+	}
+
+	h.press("]", "up") // another item starts at the top
+	if h.m.detailsTop != 0 {
+		t.Errorf("top %d after moving on", h.m.detailsTop)
+	}
+}
+
+func TestFullScreenDetailsScroll(t *testing.T) {
+	h := detailsHarness(t, 80, 24, "")
+	h.press("down", "down", "i")
+	h.advance(detailsDelay)
+	h.want("↓ more  ]", "[ ] scroll")
+	h.press("]", "]")
+	h.want("↑ more  [")
+	if h.m.detailsTop == 0 {
+		t.Error("] did not scroll the full-screen details")
+	}
+	h.press("i") // closed: [ and ] do nothing
+	top := h.m.detailsTop
+	h.press("]")
+	if h.m.detailsTop != top {
+		t.Error("] scrolled hidden details")
+	}
+}
+
+func TestFlowText(t *testing.T) {
+	f := flow{room: func(y int) int { return 9 }}
+	f.text("one two three four\n\n\nfive\tsix", nil, lipgloss.NewStyle())
+	var got []string
+	for _, l := range f.lines {
+		var s string
+		for _, sp := range l {
+			s += sp.text
+		}
+		got = append(got, s)
+	}
 	want := []string{"one two", "three", "four", "", "five six"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("wrap = %q, want %q", got, want)
+		t.Errorf("flow = %q, want %q", got, want)
 	}
-	for _, l := range wrap("Zażółć gęślą jaźń 日本語のアルバムとても長い", 7) {
-		if width(l) > 7 {
-			t.Errorf("line %q too wide", l)
+	narrow := flow{room: func(y int) int { return 7 }}
+	narrow.text("Zażółć gęślą jaźń 日本語のアルバムとても長い", []span{{"ab", lipgloss.NewStyle()}}, lipgloss.NewStyle())
+	for _, l := range narrow.lines {
+		if w := spansWidth(l); w > 7 {
+			t.Errorf("line %v is %d wide", l, w)
 		}
 	}
 }

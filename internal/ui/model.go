@@ -85,6 +85,8 @@ type Options struct {
 	Images *artwork.Loader
 	// Art is how images are drawn (when the terminal has colours).
 	Art art.Mode
+	// Version is shown in the help.
+	Version string
 }
 
 // Model is the Bubble Tea model of kodipilot.
@@ -101,14 +103,19 @@ type Model struct {
 	width, height int
 	view          viewKind
 	helpOpen      bool
-	helpTop       int  // the first help line shown
-	confirmClear  bool // asking whether to clear the queue
-	paneHidden    bool // the user hid the details pane
-	detailsFull   bool // the details fill the screen (when the pane does not fit)
+	helpTop       int // the first help line shown
+	helpCache     struct {
+		inner int
+		lines []string
+	}
+	confirmClear bool // asking whether to clear the queue
+	paneHidden   bool // the user hid the details pane
+	detailsFull  bool // the details fill the screen (when the pane does not fit)
 
 	info            map[itemKey]*details // fetched details
 	detailsKey      itemKey              // the item the details follow
 	detailsSequence int                  // identifies the one details timer that counts
+	detailsTop      int                  // the details' scroll position, in lines
 	artPending      map[string]bool      // images being rendered
 	artFailed       map[string]bool      // art URLs without an image
 	hadImage        bool                 // the last details shown had an image
@@ -204,9 +211,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.theme = newTheme(m.dark, m.colors)
+		m.helpCache.lines = nil
 	case tea.ColorProfileMsg:
 		m.colors = msg.Profile
 		m.theme = newTheme(m.dark, m.colors)
+		m.helpCache.lines = nil
 	case tea.KeyPressMsg:
 		return m.key(msg.String())
 
@@ -300,7 +309,7 @@ func (m *Model) helpKey(key string) {
 	case "end":
 		m.helpTop = farAway
 	}
-	m.helpTop = max(0, min(m.helpTop, len(m.helpLines(0))-page))
+	m.helpTop = max(0, min(m.helpTop, len(m.helpDoc())-page))
 }
 
 // confirmKey handles a key while the clear-the-queue question is open.

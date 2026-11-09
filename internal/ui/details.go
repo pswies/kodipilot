@@ -4,8 +4,12 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -180,7 +184,7 @@ func (m *Model) followDetails() tea.Cmd {
 	}
 	var cmds []tea.Cmd
 	if key != m.detailsKey {
-		m.detailsKey = key
+		m.detailsKey, m.detailsTop = key, 0
 		m.detailsSequence++
 		if m.info[key] == nil {
 			cmds = append(cmds, m.clock.After(detailsDelay, detailsDueMsg{m.detailsSequence}))
@@ -407,83 +411,209 @@ func (m *Model) paneSize() (w, h int) {
 }
 
 // detailsLines renders the details of the highlighted item in exactly
-// height lines of width w (margins included).
+// height lines of width w (margins included): the window of the details
+// document at the scroll position, with dim indicators when there is more
+// above or below.
 func (m *Model) detailsLines(w, height int) []string {
+	doc := m.detailsDoc(w, height)
+	top := min(m.detailsTop, max(0, len(doc)-height))
+	out := slices.Clone(doc[top:min(len(doc), top+height)])
+	indicator := func(text string) string {
+		return " " + line(max(0, w-2), m.theme.plain, nil, []span{{text, m.theme.dim}})
+	}
+	if top > 0 && len(out) > 0 {
+		out[0] = indicator("↑ more  [")
+	}
+	if top+height < len(doc) && len(out) > 0 {
+		out[len(out)-1] = indicator("↓ more  ]")
+	}
+	for len(out) < height {
+		out = append(out, "")
+	}
+	return out
+}
+
+// detailsOverflow reports whether the details shown do not fit, so that
+// they can be scrolled.
+func (m *Model) detailsOverflow() bool {
+	if !m.detailsShown() {
+		return false
+	}
+	w, h := m.paneSize()
+	return len(m.detailsDoc(w+2, h)) > h
+}
+
+// scrollDetails scrolls the details by half the pane height, within the
+// document.
+func (m *Model) scrollDetails(direction int) tea.Cmd {
+	if !m.detailsShown() {
+		return nil
+	}
+	w, h := m.paneSize()
+	last := max(0, len(m.detailsDoc(w+2, h))-h)
+	m.detailsTop = max(0, min(last, m.detailsTop+direction*max(1, h/2)))
+	return nil
+}
+
+func (m *Model) scrollDetailsUp() tea.Cmd   { return m.scrollDetails(-1) }
+func (m *Model) scrollDetailsDown() tea.Cmd { return m.scrollDetails(+1) }
+
+// detailsDoc lays out the details of the highlighted item as one document of
+// lines w columns wide (margins included), for a pane height lines tall.
+//
+// The image sits at the top left. When there are at least besideMin columns
+// to its right, the text starts there and flows on under the image at the
+// full width; otherwise the text starts below the image.
+func (m *Model) detailsDoc(w, height int) []string {
 	t := m.theme
 	inner := max(0, w-2)
-	var out []string
-	emit := func(s string) {
-		if len(out) < height {
-			out = append(out, " "+s)
-		}
-	}
 	d := m.shown()
+
+	var art []string
 	cols, rows, ok := m.artBox(d, inner, height)
 	if !ok && d.loading && m.hadImage { // keep the image's place
 		cols, rows, ok = inner, height*artShare/100, inner >= 4 && height*artShare/100 >= 2
 	}
 	if ok {
 		if s, done := m.cachedArt(d.image, cols, rows); done {
-			for _, l := range strings.Split(s, "\n") {
-				emit(l) // left-aligned, like the text below
-
-			}
+			art = strings.Split(s, "\n")
 		} else {
 			for _, l := range placeholder(min(cols, 2*rows), rows) {
-				emit(line(inner, t.plain, []span{{l, t.dim}}, nil))
+				art = append(art, t.dim.Render(l))
 			}
 		}
-		emit("")
+	}
+	artWidth, side, textTop := 0, 0, 0
+	if len(art) > 0 {
+		artWidth = ansi.StringWidth(art[0])
+		if inner-artWidth-besideGap >= besideMin {
+			side = artWidth + besideGap
+		} else {
+			textTop = len(art) + 1 // below the image and a blank line
+		}
 	}
 
-	var text [][]span
-	if d.title != "" {
-		for _, l := range wrap(d.title, inner) {
-			text = append(text, []span{{l, t.strong}})
+	f := flow{room: func(y int) int {
+		if y+textTop < len(art) {
+			return inner - side
 		}
+		return inner
+	}}
+	if d.title != "" {
+		f.text(d.title, nil, t.strong)
 	}
 	labelWidth := 0
-	for _, f := range d.fields {
-		labelWidth = max(labelWidth, width(f.label))
+	for _, field := range d.fields {
+		labelWidth = max(labelWidth, width(field.label))
 	}
-	valueWidth := inner - labelWidth - detailLabelGap
-	for _, f := range d.fields {
-		for i, l := range wrap(f.value, max(1, valueWidth)) {
-			label := ""
-			if i == 0 {
-				label = f.label
-			}
-			text = append(text, []span{{pad(label, labelWidth+detailLabelGap), t.dim}, {l, t.plain}})
-		}
+	for _, field := range d.fields {
+		label := []span{{pad(field.label, labelWidth+detailLabelGap), t.dim}}
+		f.text(field.value, label, t.plain)
 	}
 	if d.file != "" {
-		for _, l := range wrap(d.file, inner) {
-			text = append(text, []span{{l, t.dim}})
-		}
+		f.text(d.file, nil, t.dim)
 	}
-	for _, f := range d.texts {
-		text = append(text, nil, []span{{f.label, t.dim}})
-		for _, l := range wrap(f.value, inner) {
-			text = append(text, []span{{l, t.plain}})
-		}
+	for _, field := range d.texts {
+		f.lines = append(f.lines, nil)
+		f.text(field.label, nil, t.dim)
+		f.text(field.value, nil, t.plain)
 	}
 
-	room := height - len(out)
-	if len(text) > room && room > 0 {
-		text = text[:room]
-		for len(text) > 1 && text[len(text)-1] == nil {
-			text = text[:len(text)-1] // no blank line before the cut
+	var doc []string
+	for y := 0; y < max(len(art), textTop+len(f.lines)); y++ {
+		var spans []span
+		if i := y - textTop; i >= 0 && i < len(f.lines) {
+			spans = f.lines[i]
 		}
-		last := text[len(text)-1]
-		text[len(text)-1] = append(last[:len(last):len(last)], span{" " + ellipsis, t.dim})
+		switch {
+		case y < len(art) && side > 0:
+			doc = append(doc, " "+fill(art[y], side)+line(inner-side, t.plain, spans, nil))
+		case y < len(art):
+			doc = append(doc, " "+art[y])
+		default:
+			doc = append(doc, " "+line(inner, t.plain, spans, nil))
+		}
 	}
-	for _, spans := range text {
-		emit(line(inner, t.plain, spans, nil))
+	return doc
+}
+
+const (
+	besideGap = 2  // between the image and the text beside it
+	besideMin = 28 // the least width for text beside the image
+)
+
+// flow collects wrapped lines whose width depends on their position, so
+// that text can run beside the image and then under it.
+type flow struct {
+	room  func(y int) int // the width of line y
+	lines [][]span
+}
+
+// text appends text in a style, wrapped by paragraphs. The first line starts
+// with prefix and the others are indented to match.
+func (f *flow) text(text string, prefix []span, style lipgloss.Style) {
+	indent := 0
+	for _, s := range prefix {
+		indent += width(s.text)
 	}
-	for len(out) < height {
-		out = append(out, "")
+	first := true
+	for i, para := range paragraphs(text) {
+		if i > 0 {
+			f.lines = append(f.lines, nil)
+		}
+		for para != "" {
+			w := max(1, f.room(len(f.lines))-indent)
+			next, rest := cut(para, w)
+			lead := []span{{strings.Repeat(" ", indent), style}}
+			if first {
+				lead, first = prefix, false
+			}
+			f.lines = append(f.lines, append(slices.Clone(lead), span{next, style}))
+			para = rest
+		}
+	}
+}
+
+// paragraphs splits text at line breaks into cleaned, non-empty paragraphs.
+func paragraphs(text string) []string {
+	var out []string
+	for _, p := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if p = strings.TrimSpace(clean(p)); p != "" {
+			out = append(out, p)
+		}
 	}
 	return out
+}
+
+// cut returns the first line of text wrapped at w columns, breaking at a
+// space when it can, and the rest.
+func cut(text string, w int) (string, string) {
+	end := 0 // the end of the words that fit
+	for end < len(text) {
+		start := end
+		if start > 0 {
+			start++ // past the space
+		}
+		stop := strings.IndexByte(text[start:], ' ')
+		if stop < 0 {
+			stop = len(text)
+		} else {
+			stop += start
+		}
+		if width(text[:stop]) > w {
+			break
+		}
+		end = stop
+	}
+	if end == 0 { // a word longer than the line: break it
+		first := ansi.Truncate(text, w, "")
+		if first == "" {
+			_, size := utf8.DecodeRuneInString(text)
+			first = text[:size]
+		}
+		return first, strings.TrimLeft(text[len(first):], " ")
+	}
+	return text[:end], strings.TrimLeft(text[end:], " ")
 }
 
 // placeholder is a dim frame with "loading…" in it.
@@ -500,29 +630,6 @@ func placeholder(w, h int) []string {
 		lines = append(lines, "│"+inside+"│")
 	}
 	return append(lines, "╰"+strings.Repeat("─", w-2)+"╯")
-}
-
-// wrap breaks text into lines of at most w columns, at spaces where it can,
-// keeping its paragraphs (single blank lines between them).
-func wrap(text string, w int) []string {
-	if w <= 0 {
-		return nil
-	}
-	var out []string
-	blank := false
-	for _, para := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		para = strings.TrimSpace(clean(para))
-		if para == "" {
-			blank = len(out) > 0
-			continue
-		}
-		if blank {
-			out = append(out, "")
-			blank = false
-		}
-		out = append(out, strings.Split(ansi.Wrap(para, w, ""), "\n")...)
-	}
-	return out
 }
 
 // cachedArt returns the rendered image, if it is ready.

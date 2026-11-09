@@ -94,7 +94,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if os.Getenv("NO_COLOR") != "" { // https://no-color.org: any value
 		opts = append(opts, tea.WithColorProfile(colorprofile.Ascii))
 	}
-	uiOpts := ui.Options{Art: map[string]art.Mode{"symbols": art.Symbols, "blocks": art.Blocks, "ascii": art.ASCII}[artFlag]}
+	uiOpts := ui.Options{Version: buildVersion(), Art: map[string]art.Mode{"symbols": art.Symbols, "blocks": art.Blocks, "ascii": art.ASCII}[artFlag]}
 	if artFlag != "off" {
 		uiOpts.Images = artwork.NewLoader(images)
 	}
