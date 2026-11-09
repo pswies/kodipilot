@@ -343,8 +343,17 @@ func (m *Music) item(json.RawMessage) any {
 		return map[string]any{"item": map[string]any{}}
 	}
 	s := m.song(m.queue[m.position])
+	album, albumID := "", 0
+	for _, a := range Albums() {
+		for _, song := range Songs(a.ID) {
+			if song.ID == s.ID {
+				album, albumID = a.Title, a.ID
+			}
+		}
+	}
 	return map[string]any{"item": map[string]any{
-		"title": s.Title, "label": s.Title, "artist": []string{s.DisplayArtist}, "album": "", "type": "song",
+		"id": s.ID, "albumid": albumID, "title": s.Title, "label": s.Title,
+		"artist": []string{s.DisplayArtist}, "album": album, "type": "song",
 	}}
 }
 

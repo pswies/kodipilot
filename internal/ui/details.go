@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/pswies/kodipilot/internal/art"
+	"github.com/pswies/kodipilot/internal/artwork"
 	"github.com/pswies/kodipilot/internal/kodi"
 )
 
@@ -134,7 +135,7 @@ func (m *Model) shown() *details {
 // left, the list on the right.
 func (m *Model) layout() (list, pane int) {
 	w := m.width
-	if m.paneHidden || !m.paneFits() {
+	if _, _, ok := m.highlighted(); !ok || m.paneHidden || !m.paneFits() {
 		return w, 0
 	}
 	if w >= wideWidth {
@@ -149,7 +150,10 @@ func (m *Model) paneFits() bool { return m.width >= paneMinWidth && m.height >= 
 
 // fullDetails reports whether the details fill the screen instead of the
 // list (on terminals too small for the pane).
-func (m *Model) fullDetails() bool { return m.detailsFull && !m.paneFits() }
+func (m *Model) fullDetails() bool {
+	_, _, ok := m.highlighted()
+	return ok && m.detailsFull && !m.paneFits()
+}
 
 func (m *Model) detailsShown() bool {
 	_, pane := m.layout()
@@ -394,7 +398,7 @@ func (m *Model) renderArt() tea.Cmd {
 		return nil
 	}
 	m.artPending[pending] = true
-	return m.command(func(ctx context.Context) tea.Msg {
+	return commandWithin(artwork.DefaultTimeout, func(ctx context.Context) tea.Msg {
 		_, err := loader.Render(ctx, url, cols, rows, opts)
 		return artMsg{url, pending, err}
 	})
@@ -495,9 +499,9 @@ func (m *Model) detailsDoc(w, height int) []string {
 
 	f := flow{room: func(y int) int {
 		if y+textTop < len(art) {
-			return inner - side
+			return min(inner-side, textMaxWidth)
 		}
-		return inner
+		return min(inner, textMaxWidth)
 	}}
 	if d.title != "" {
 		f.text(d.title, nil, t.strong)
@@ -538,8 +542,9 @@ func (m *Model) detailsDoc(w, height int) []string {
 }
 
 const (
-	besideGap = 2  // between the image and the text beside it
-	besideMin = 28 // the least width for text beside the image
+	besideGap    = 2  // between the image and the text beside it
+	besideMin    = 28 // the least width for text beside the image
+	textMaxWidth = 88 // the details text is no wider, for reading
 )
 
 // flow collects wrapped lines whose width depends on their position, so

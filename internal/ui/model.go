@@ -12,7 +12,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
+	"io"
+	"net"
+	"net/url"
+	"slices"
+	"strings"
+	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -23,10 +32,12 @@ import (
 )
 
 const (
-	callTimeout   = 5 * time.Second // bounds each command's Kodi calls
-	pollInterval  = time.Second     // status refresh, and retry while waiting for Kodi
-	popupDuration = 2 * time.Second // the volume pop-up
-	flashDuration = 5 * time.Second // an error in the footer
+	callTimeout    = 5 * time.Second  // bounds each command's Kodi calls
+	libraryTimeout = 60 * time.Second // loading the whole library
+	artistTimeout  = 30 * time.Second // an artist's songs, one call per album
+	pollInterval   = time.Second      // status refresh, and retry while waiting for Kodi
+	popupDuration  = 2 * time.Second  // the volume pop-up
+	flashDuration  = 5 * time.Second  // an error in the footer
 )
 
 type viewKind int
@@ -53,7 +64,24 @@ type level struct {
 	albums  []kodi.Album
 	songs   []kodi.Song
 	album   kodi.Album // the album of a tracks level
-	list    cursor
+	rows    []int      // rows of a several-disc album: song indexes, -disc before each disc after the first
+	list    cursor     // over the items; top counts rows
+}
+
+// discRows returns the rows of an album's tracks with a separator before
+// each disc after the first, or nil for a single disc.
+func discRows(songs []kodi.Song) []int {
+	var rows []int
+	for i, song := range songs {
+		if i > 0 && song.Disc != songs[i-1].Disc {
+			rows = append(rows, -max(1, song.Disc))
+		}
+		rows = append(rows, i)
+	}
+	if len(rows) == len(songs) {
+		return nil
+	}
+	return rows
 }
 
 func (l *level) len() int { return len(l.artists) + len(l.albums) + len(l.songs) }
@@ -97,6 +125,7 @@ type Model struct {
 	clock  Clock
 	theme  theme
 	dark   bool
+	bg, fg color.Color // the terminal's colours, nil until known
 	colors colorprofile.Profile
 
 	keys          []keySection
@@ -119,6 +148,8 @@ type Model struct {
 	artPending      map[string]bool      // images being rendered
 	artFailed       map[string]bool      // art URLs without an image
 	hadImage        bool                 // the last details shown had an image
+	offline         bool                 // Kodi did not answer the last poll
+	video           bool                 // a video plays
 
 	lib     *kodi.Library // nil while waiting for Kodi
 	waitErr error         // why Kodi is not there yet
@@ -155,7 +186,7 @@ func New(client kodi.Client, clock Clock, opts Options) *Model {
 		colors:      colorprofile.TrueColor,
 		lastPlaying: -1,
 	}
-	m.theme = newTheme(m.dark, m.colors)
+	m.theme = newTheme(m.dark, m.colors, nil, nil)
 	return m
 }
 
@@ -170,6 +201,7 @@ type (
 	pollMsg  struct {
 		actions   int // Model.actions when the poll started
 		status    *kodi.Status
+		video     bool
 		volume    kodi.Volume
 		queue     []kodi.QueueItem
 		withQueue bool
@@ -192,9 +224,15 @@ type (
 	redrawMsg struct{} // a pop-up or an error message has expired
 )
 
-// Init starts loading the library and asks for the terminal background.
+// Init starts loading the library and asks for the terminal's colours.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.loadLibrary(), tea.RequestBackgroundColor)
+	return tea.Batch(m.loadLibrary(), tea.RequestBackgroundColor, tea.RequestForegroundColor)
+}
+
+// retheme makes the styles follow the terminal's colours.
+func (m *Model) retheme() {
+	m.theme = newTheme(m.dark, m.colors, m.bg, m.fg)
+	m.helpCache.lines = nil
 }
 
 // Update handles a message.
@@ -209,24 +247,19 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
-		m.dark = msg.IsDark()
-		m.theme = newTheme(m.dark, m.colors)
-		m.helpCache.lines = nil
+		m.dark, m.bg = msg.IsDark(), msg.Color
+		m.retheme()
+	case tea.ForegroundColorMsg:
+		m.fg = msg.Color
+		m.retheme()
 	case tea.ColorProfileMsg:
 		m.colors = msg.Profile
-		m.theme = newTheme(m.dark, m.colors)
-		m.helpCache.lines = nil
+		m.retheme()
 	case tea.KeyPressMsg:
 		return m.key(msg.String())
 
 	case libraryMsg:
-		if msg.err != nil {
-			m.waitErr = msg.err
-			return m.clock.After(pollInterval, retryMsg{})
-		}
-		m.lib, m.waitErr = msg.lib, nil
-		m.levels = []level{{kind: artistsLevel, title: "Artists", artists: msg.lib.Artists()}}
-		return m.refresh()
+		return m.loaded(msg)
 	case retryMsg:
 		return m.loadLibrary()
 	case tickMsg:
@@ -244,6 +277,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			flash = m.showError(msg.err)
 		case msg.info != "":
 			flash = m.showInfo(msg.info)
+		default:
+			m.flash = "" // a success clears an older message
 		}
 		return tea.Batch(flash, m.refresh())
 	case detailsDueMsg:
@@ -257,13 +292,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.info[msg.key] = msg.details // cached by id, whether still highlighted or not
 	case artMsg:
 		delete(m.artPending, msg.pending)
-		if msg.err != nil && !errors.Is(msg.err, context.Canceled) && !errors.Is(msg.err, context.DeadlineExceeded) {
+		if msg.err != nil { // timeouts too: a blocked source is not tried again
 			m.artFailed[msg.url] = true
 		}
 	case volumeMsg:
 		if msg.err != nil {
 			return m.showError(msg.err)
 		}
+		m.flash = ""
 		return m.showVolume(msg.volume)
 	}
 	return nil
@@ -418,7 +454,9 @@ func (m *Model) opened(msg songsMsg) tea.Cmd {
 	}
 	l := m.current()
 	if len(m.levels) == msg.depth && l.kind == albumsLevel && l.len() > 0 && l.albums[l.list.index].ID == msg.album.ID {
-		m.levels = append(m.levels, level{kind: tracksLevel, title: msg.album.Title, songs: msg.songs, album: msg.album})
+		m.levels = append(m.levels, level{
+			kind: tracksLevel, title: msg.album.Title, songs: msg.songs, album: msg.album, rows: discRows(msg.songs),
+		})
 	}
 	return nil
 }
@@ -437,63 +475,80 @@ func (m *Model) backOrQuit() tea.Cmd {
 	return tea.Quit
 }
 
-// selection returns the songs of the selected library row (an artist's
-// albums, an album, or a track's album), the position of the selected track
-// in them, and the row's name.
-func (m *Model) selection() (songs func(context.Context) ([]kodi.Song, error), position int, name string) {
+// selection is the songs of the selected library row: an artist's albums,
+// an album, or a track's album.
+type selection struct {
+	songs    func(context.Context) ([]kodi.Song, error)
+	position int           // of the selected track in songs
+	name     string        // of the row
+	timeout  time.Duration // for fetching the songs and acting on them
+	track    bool          // the row is a track
+}
+
+func (m *Model) selection() (selection, bool) {
 	l := m.current()
 	if l == nil || l.len() == 0 {
-		return nil, 0, ""
+		return selection{}, false
 	}
 	lib, i := m.lib, l.list.index
 	switch l.kind {
 	case artistsLevel:
 		artist := l.artists[i]
-		return func(ctx context.Context) ([]kodi.Song, error) { return lib.ArtistSongs(ctx, artist.ID) }, 0, artist.Name
+		return selection{
+			songs:   func(ctx context.Context) ([]kodi.Song, error) { return lib.ArtistSongs(ctx, artist.ID) },
+			name:    artist.Name,
+			timeout: artistTimeout,
+		}, true
 	case albumsLevel:
 		album := l.albums[i]
-		return func(ctx context.Context) ([]kodi.Song, error) { return lib.Songs(ctx, album.ID) }, 0, album.Title
+		return selection{
+			songs:   func(ctx context.Context) ([]kodi.Song, error) { return lib.Songs(ctx, album.ID) },
+			name:    album.Title,
+			timeout: callTimeout,
+		}, true
 	default:
 		all := l.songs
-		return func(context.Context) ([]kodi.Song, error) { return all, nil }, i, all[i].Title
+		return selection{
+			songs:    func(context.Context) ([]kodi.Song, error) { return all, nil },
+			position: i, name: all[i].Title, timeout: callTimeout, track: true,
+		}, true
 	}
 }
 
 // play replaces the queue with the selection and plays it.
 func (m *Model) play() tea.Cmd {
-	songs, position, _ := m.selection()
-	if songs == nil {
+	sel, ok := m.selection()
+	if !ok {
 		return nil
 	}
-	return m.act(func(ctx context.Context) error {
-		list, err := songs(ctx)
+	return m.actWithin(sel.timeout, func(ctx context.Context) (string, error) {
+		list, err := sel.songs(ctx)
 		if err != nil {
-			return err
+			return "", err
 		}
-		return m.player.Play(ctx, list, position)
+		return "", m.player.Play(ctx, list, sel.position)
 	})
 }
 
 // enqueue appends the selection to the queue: an artist's or album's songs,
 // or one track.
 func (m *Model) enqueue() tea.Cmd {
-	songs, position, name := m.selection()
-	if songs == nil {
+	sel, ok := m.selection()
+	if !ok {
 		return nil
 	}
-	track := m.current().kind == tracksLevel
-	return m.actWith(func(ctx context.Context) (string, error) {
-		list, err := songs(ctx)
+	return m.actWithin(sel.timeout, func(ctx context.Context) (string, error) {
+		list, err := sel.songs(ctx)
 		if err != nil {
 			return "", err
 		}
-		if track {
-			list = list[position : position+1]
+		if sel.track {
+			list = list[sel.position : sel.position+1]
 		}
 		if err := m.player.Enqueue(ctx, list); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Queued %s: %s", plural(len(list), "track"), name), nil
+		return fmt.Sprintf("Queued %s: %s", plural(len(list), "track"), sel.name), nil
 	})
 }
 
@@ -540,7 +595,10 @@ func (m *Model) moveItem(delta int) tea.Cmd {
 }
 
 func (m *Model) askClear() tea.Cmd {
-	m.confirmClear = len(m.queue) > 0
+	if len(m.queue) == 0 {
+		return m.showInfo("The queue is already empty.")
+	}
+	m.confirmClear = true
 	return nil
 }
 
@@ -567,14 +625,27 @@ func (m *Model) scroll() {
 	height := m.listHeight()
 	m.queueList.scroll(height, len(m.queue))
 	for i := range m.levels {
-		m.levels[i].list.scroll(height, m.levels[i].len())
+		l := &m.levels[i]
+		if l.rows == nil {
+			l.list.scroll(height, l.len())
+			continue
+		}
+		l.list.move(0, l.len())
+		rows := cursor{index: slices.Index(l.rows, l.list.index), top: l.list.top}
+		rows.scroll(height, len(l.rows))
+		l.list.top = rows.top
 	}
 }
 
-// command runs f with a timeout as a command.
+// command runs f as a command, with the usual timeout for Kodi calls.
 func (m *Model) command(f func(context.Context) tea.Msg) tea.Cmd {
+	return commandWithin(callTimeout, f)
+}
+
+// commandWithin runs f as a command with a timeout.
+func commandWithin(timeout time.Duration, f func(context.Context) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		return f(ctx)
 	}
@@ -588,8 +659,13 @@ func (m *Model) act(f func(context.Context) error) tea.Cmd {
 // actWith runs an action that reports what it did; the report is flashed
 // and the status refreshed afterwards.
 func (m *Model) actWith(f func(context.Context) (string, error)) tea.Cmd {
+	return m.actWithin(callTimeout, f)
+}
+
+// actWithin is actWith with a timeout.
+func (m *Model) actWithin(timeout time.Duration, f func(context.Context) (string, error)) tea.Cmd {
 	m.actions++
-	return m.command(func(ctx context.Context) tea.Msg {
+	return commandWithin(timeout, func(ctx context.Context) tea.Msg {
 		info, err := f(ctx)
 		return actionMsg{info: info, err: err}
 	})
@@ -597,10 +673,39 @@ func (m *Model) actWith(f func(context.Context) (string, error)) tea.Cmd {
 
 func (m *Model) loadLibrary() tea.Cmd {
 	client := m.client
-	return m.command(func(ctx context.Context) tea.Msg {
+	return commandWithin(libraryTimeout, func(ctx context.Context) tea.Msg {
 		lib, err := kodi.LoadLibrary(ctx, client)
 		return libraryMsg{lib: lib, err: err}
 	})
+}
+
+// reload loads the library again.
+func (m *Model) reload() tea.Cmd { return m.loadLibrary() }
+
+// loaded shows a loaded library, or why it did not load. While waiting
+// for Kodi it retries every second, except when Kodi rejects the password.
+func (m *Model) loaded(msg libraryMsg) tea.Cmd {
+	reload := m.lib != nil
+	var unavailable *kodi.UnavailableError
+	m.offline = errors.As(msg.err, &unavailable)
+	switch {
+	case msg.err != nil && reload:
+		return m.showError(msg.err) // keep the library shown
+	case errors.Is(msg.err, kodi.ErrUnauthorized):
+		m.waitErr = msg.err // retrying would not help
+		return nil
+	case msg.err != nil:
+		m.waitErr = msg.err
+		return m.clock.After(pollInterval, retryMsg{})
+	}
+	m.lib, m.waitErr = msg.lib, nil
+	m.levels = []level{{kind: artistsLevel, title: "Artists", artists: msg.lib.Artists()}}
+	m.info = make(map[itemKey]*details)
+	var flash tea.Cmd
+	if reload {
+		flash = m.showInfo(fmt.Sprintf("Library reloaded: %s", plural(len(msg.lib.Artists()), "artist")))
+	}
+	return tea.Batch(flash, m.refresh())
 }
 
 // refresh polls the status now, instead of at the next tick.
@@ -619,7 +724,7 @@ func (m *Model) poll() tea.Cmd {
 	actions, withQueue := m.actions, m.view == queueView
 	return m.command(func(ctx context.Context) tea.Msg {
 		msg := pollMsg{actions: actions, withQueue: withQueue}
-		if msg.status, msg.err = m.player.NowPlaying(ctx); msg.err != nil {
+		if msg.status, msg.video, msg.err = m.player.Playing(ctx); msg.err != nil {
 			return msg
 		}
 		if msg.volume, msg.err = m.player.Volume(ctx); msg.err != nil {
@@ -641,11 +746,15 @@ func (m *Model) polled(msg pollMsg) tea.Cmd {
 		return m.poll()
 	}
 	var cmd tea.Cmd
+	var unavailable *kodi.UnavailableError
+	m.offline = errors.As(msg.err, &unavailable) // the status line says so
 	if msg.err != nil {
-		m.status, m.volume = nil, nil
-		cmd = m.showError(msg.err)
+		m.status, m.volume, m.video = nil, nil, false
+		if !m.offline {
+			cmd = m.showError(msg.err)
+		}
 	} else {
-		m.status = msg.status
+		m.status, m.video = msg.status, msg.video
 		if m.volume != nil && *m.volume != msg.volume {
 			cmd = m.showVolume(msg.volume) // changed outside kodipilot
 		}
@@ -728,12 +837,59 @@ func (m *Model) showInfo(text string) tea.Cmd {
 	return m.clock.After(flashDuration, redrawMsg{})
 }
 
+// errorText explains an error in a plain sentence, with the technical cause
+// as a short suffix where it helps.
 func errorText(err error) string {
 	var unavailable *kodi.UnavailableError
-	if errors.As(err, &unavailable) {
-		return "Kodi unavailable: " + err.Error()
+	var kerr *kodi.Error
+	switch {
+	case errors.Is(err, kodi.ErrUnauthorized):
+		return "Kodi rejected the user name or password. " +
+			"Check them in Kodi under Settings → Services → Control, then restart kodipilot."
+	case errors.As(err, &unavailable):
+		addr := unavailable.Addr
+		if u, err := url.Parse(addr); err == nil && u.Host != "" {
+			addr = u.Host
+		}
+		text := fmt.Sprintf("Can't reach Kodi at %s (%s).", addr, cause(unavailable.Err))
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			text += " Is Kodi running? For another machine use --host."
+		}
+		return text
+	case errors.As(err, &kerr):
+		return fmt.Sprintf("Kodi couldn't do that (%s: %s).", kerr.Method, strings.TrimSuffix(kerr.Message, "."))
 	}
-	return "Kodi: " + err.Error()
+	return "Something went wrong: " + err.Error()
+}
+
+// cause names the cause of a network error in a few words.
+func cause(err error) string {
+	var dns *net.DNSError
+	var timeout interface{ Timeout() bool }
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.As(err, &dns):
+		return "unknown host"
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout():
+		return "no answer"
+	case errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET):
+		return "connection closed"
+	}
+	text := err.Error()
+	if i := strings.LastIndex(text, ": "); i >= 0 {
+		text = text[i+2:]
+	}
+	return text
+}
+
+// sentence returns text with its first letter in upper case.
+func sentence(text string) string {
+	if text == "" {
+		return ""
+	}
+	r, size := utf8.DecodeRuneInString(text)
+	return string(unicode.ToUpper(r)) + text[size:]
 }
 
 // plural returns "1 track", "2 tracks" and so on.

@@ -90,7 +90,7 @@ func TestQueueViewStartsWhenStopped(t *testing.T) {
 func TestRemove(t *testing.T) {
 	h := queueHarness(t) // playing 103, the third item
 	h.press("delete")
-	h.want("the playing item can't be removed")
+	h.want("The playing item can't be removed")
 	h.wantQueue(101, 102, 103, 104)
 
 	h.press("end", "d")

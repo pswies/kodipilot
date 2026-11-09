@@ -36,7 +36,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil || len(warnings) > 0 {
 		t.Fatal(err, warnings)
 	}
-	want := Config{Transport: TCP, Host: "127.0.0.1", Port: 9090}
+	want := Config{Transport: TCP, Host: "127.0.0.1", Port: 9090, Art: "symbols"}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
 	}
@@ -69,7 +69,7 @@ password = "file-password"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Transport: HTTP, Host: "env-host", Port: 1111, User: "env-user", Password: "env-password"}
+	want := Config{Transport: HTTP, Host: "env-host", Port: 1111, User: "env-user", Password: "env-password", Art: "symbols"}
 	if cfg != want {
 		t.Errorf("env: %+v, want %+v", cfg, want)
 	}
@@ -80,7 +80,7 @@ password = "file-password"
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = Config{Transport: HTTP, Host: "flag-host", Port: 2222, User: "flag-user", Password: "env-password"}
+	want = Config{Transport: HTTP, Host: "flag-host", Port: 2222, User: "flag-user", Password: "env-password", Art: "symbols"}
 	if cfg != want {
 		t.Errorf("flags: %+v, want %+v", cfg, want)
 	}
@@ -111,7 +111,7 @@ func TestHTTPDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{Transport: HTTP, Host: "perun", Port: 8080, User: "kodi", Password: "secret"}
+	want := Config{Transport: HTTP, Host: "perun", Port: 8080, User: "kodi", Password: "secret", Art: "symbols"}
 	if cfg != want {
 		t.Errorf("cfg = %+v, want %+v", cfg, want)
 	}
@@ -209,5 +209,24 @@ func TestDefaultPath(t *testing.T) {
 	path, err = DefaultPath(env(nil))
 	if err != nil || !strings.HasSuffix(path, "/.config/kodipilot/config.toml") {
 		t.Errorf("path = %s, %v", path, err)
+	}
+}
+
+func TestArt(t *testing.T) {
+	path := writeConfig(t, `art = "blocks"`, 0o600)
+	for _, tc := range []struct {
+		flag, env, want string
+	}{
+		{"", "", "blocks"},
+		{"", "ascii", "ascii"},
+		{"off", "ascii", "off"},
+	} {
+		cfg, _, err := Load(Sources{Flags: Settings{Art: tc.flag}, Getenv: env(map[string]string{EnvArt: tc.env}), Path: path})
+		if err != nil || cfg.Art != tc.want {
+			t.Errorf("flag %q env %q: art %q, %v; want %q", tc.flag, tc.env, cfg.Art, err, tc.want)
+		}
+	}
+	if _, _, err := Load(Sources{Flags: Settings{Art: "sixel"}, Getenv: env(nil)}); err == nil {
+		t.Error("unknown art: no error")
 	}
 }

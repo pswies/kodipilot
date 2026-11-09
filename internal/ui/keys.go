@@ -8,12 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// The key hints in the footer; the second while the details can scroll.
-const (
-	footerHint       = "? help  Tab view  Enter open  p play  q queue  Space pause  +/- volume  Q quit"
-	footerScrollHint = "? help  Tab view  Enter open  p play  q queue  Space pause  [ ] scroll  Q quit"
-)
-
 // scope says in which view a section of the key table applies.
 type scope int
 
@@ -67,7 +61,7 @@ func keyTable() []keySection {
 				bind((*Model).home, "home"), bind((*Model).end, "end"))},
 			{"Tab", "switch Library ⇄ Queue", "Tab", bind((*Model).switchView, "tab", "shift+tab")},
 			{"Space", "pause / resume", "Space", bind((*Model).pause, "space")},
-			{"x", "stop", "X", bind((*Model).stop, "x")},
+			{"x", "stop", "x", bind((*Model).stop, "x")},
 			{". / ,", "next / previous track", ". / ,", slices.Concat(
 				bind((*Model).next, "."), bind((*Model).previous, ","))},
 			{"shift+← / shift+→", "seek back / forward", "← / →", slices.Concat(
@@ -77,11 +71,12 @@ func keyTable() []keySection {
 			{"F8, m", "mute on / off", "F8", bind((*Model).mute, "f8", "m")},
 			{"r", "repeat: off → all → one → off", "", bind((*Model).cycleRepeat, "r")},
 			{"s", "shuffle on / off", "", bind((*Model).toggleShuffle, "s")},
+			{"F5, ctrl+r", "reload the library", "", bind((*Model).reload, "f5", "ctrl+r")},
 			{"? / h", "this help", "", bind((*Model).openHelp, "?", "h")},
 			{"Q, ctrl+c", "quit (the music keeps playing)", "", bind((*Model).quit, "Q", "ctrl+c")},
 		}},
 		{"Details", everywhere, []keyRow{
-			{"i", "show / hide (full screen when narrow)", "I", bind((*Model).toggleDetails, "i")},
+			{"i", "show / hide (full screen when narrow)", "i", bind((*Model).toggleDetails, "i")},
 			{"[ / ]", "scroll the details", "", slices.Concat(
 				bind((*Model).scrollDetailsUp, "["), bind((*Model).scrollDetailsDown, "]"))},
 		}},
@@ -89,11 +84,11 @@ func keyTable() []keySection {
 			{"Enter, →", "open; on a track: play its album from there", "Enter", bind((*Model).open, "enter", "right")},
 			{"←, Backspace, Esc", "back (Esc at the top quits)", "Backspace, Esc", slices.Concat(
 				bind((*Model).back, "left", "backspace"), bind((*Model).backOrQuit, "esc"))},
-			{"p", "play now: artist, album, or from a track", "P", bind((*Model).play, "p")},
-			{"q", "add to the queue", "Q", bind((*Model).enqueue, "q")},
+			{"p", "play now: artist, album, or from a track", "p", bind((*Model).play, "p")},
+			{"q", "add to the queue", "q", bind((*Model).enqueue, "q")},
 		}},
 		{"Queue", inQueue, []keyRow{
-			{"Enter, p", "play the selected item", "Enter, P", bind((*Model).playSelected, "enter", "p")},
+			{"Enter, p", "play the selected item", "Enter, p", bind((*Model).playSelected, "enter", "p")},
 			{"← / →", "seek back / forward", "← / →", slices.Concat(
 				bind((*Model).seekBack, "left"), bind((*Model).seekForward, "right"))},
 			{"Delete, d", "remove the selected item", "Delete", bind((*Model).remove, "delete", "d")},
