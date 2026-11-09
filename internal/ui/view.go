@@ -44,7 +44,7 @@ func (m *Model) render() string {
 }
 
 // middle renders the rows between the header and the status line: the
-// list, beside it the details pane, or the full-screen details.
+// details pane on the left and the list on the right, or only one of them.
 func (m *Model) middle(w, height int) []string {
 	if m.fullDetails() {
 		return m.detailsLines(w, height)
@@ -57,7 +57,7 @@ func (m *Model) middle(w, height int) []string {
 	details := m.detailsLines(pane, height)
 	divider := m.theme.dim.Render("│")
 	for i := range rows {
-		rows[i] = fill(rows[i], list) + divider + details[i]
+		rows[i] = fill(details[i], pane) + divider + fill(rows[i], list)
 	}
 	return rows
 }
@@ -67,40 +67,73 @@ func fill(s string, w int) string {
 	return s + strings.Repeat(" ", max(0, w-ansi.StringWidth(s)))
 }
 
+// header renders the view tabs, the library breadcrumb and, on the right,
+// the position. On narrow terminals the tabs shrink to "L │ Q" before the
+// breadcrumb is cut.
 func (m *Model) header(w int) string {
 	t := m.theme
 	var crumbs []string
 	var right string
-	switch {
-	case m.view == playerView:
-		crumbs = []string{"Player", "Queue"}
+	if m.view == queueView {
 		right = m.queueSummary()
-	case len(m.levels) == 0:
-		crumbs = []string{"kodipilot"}
-	default:
-		crumbs = []string{"Library"}
-		for _, l := range m.levels {
-			crumbs = append(crumbs, l.title)
+	} else if l := m.current(); l != nil {
+		for _, level := range m.levels {
+			crumbs = append(crumbs, level.title)
 		}
-		if l := m.current(); l.len() > 0 {
+		if l.len() > 0 {
 			right = fmt.Sprintf("%d/%d", l.list.index+1, l.len())
 		}
 	}
-	left := []span{{" ", t.plain}}
+	var trail []span
 	for i, crumb := range crumbs {
 		if i == len(crumbs)-1 {
-			left = append(left, span{crumb, t.strong})
+			trail = append(trail, span{crumb, t.strong})
 		} else {
-			left = append(left, span{crumb, t.dim}, span{" ▸ ", t.dim})
+			trail = append(trail, span{crumb, t.dim}, span{" ▸ ", t.dim})
 		}
 	}
-	if right == "" {
-		return line(w, t.plain, left, nil)
+	if len(trail) > 0 {
+		trail = append([]span{{"   ", t.plain}}, trail...)
 	}
-	return line(w, t.plain, left, []span{{right + " ", t.dim}})
+	var rights []span
+	if right != "" {
+		rights = []span{{right + " ", t.dim}}
+	}
+
+	left := append(m.tabs(false), trail...)
+	if spansWidth(left)+spansWidth(rights)+2 > w {
+		left = append(m.tabs(true), trail...)
+	}
+	if len(trail) > 0 && spansWidth(left)+spansWidth(rights)+2 > w {
+		rights = nil // the breadcrumb goes before the position
+	}
+	return line(w, t.plain, left, rights)
 }
 
-// queueSummary is the header's right side in the player view: position,
+// tabs returns the view tabs, the active one in the accent: "Library │
+// Queue", or "L │ Q" when short.
+func (m *Model) tabs(short bool) []span {
+	t := m.theme
+	names := [2]string{"Library", "Queue"}
+	if short {
+		names = [2]string{"L", "Q"}
+	}
+	library, queue := t.strong, t.dim
+	if m.view == queueView {
+		library, queue = t.dim, t.strong
+	}
+	return []span{{" ", t.plain}, {names[0], library}, {" │ ", t.dim}, {names[1], queue}}
+}
+
+func spansWidth(spans []span) int {
+	n := 0
+	for _, s := range spans {
+		n += width(clean(s.text))
+	}
+	return n
+}
+
+// queueSummary is the header's right side in the queue view: position,
 // repeat and shuffle.
 func (m *Model) queueSummary() string {
 	s := m.status
@@ -129,9 +162,9 @@ func (m *Model) body(w, height int) []string {
 		}
 	}
 	switch l := m.current(); {
-	case m.view == playerView && len(m.queue) == 0:
+	case m.view == queueView && len(m.queue) == 0:
 		note("queue is empty — pick something in the library (Tab)", t.dim)
-	case m.view == playerView:
+	case m.view == queueView:
 		c := m.queueList
 		for i := c.top; i < min(len(m.queue), c.top+height); i++ {
 			rows = append(rows, m.queueRow(w, i, i == c.index))

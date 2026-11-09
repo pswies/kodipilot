@@ -43,7 +43,7 @@ func TestWaitingForKodi(t *testing.T) {
 	}
 	h.kodi.Reply("AudioLibrary.GetArtists", map[string]any{"artists": koditest.Artists()})
 	h.advance(time.Second)
-	h.want("Library ▸ Artists", "Brian Eno")
+	h.want("Library │ Queue   Artists", "Brian Eno")
 	h.wantNot("waiting")
 }
 
@@ -69,17 +69,17 @@ func TestQuitKeys(t *testing.T) {
 	h := newHarness(t, 80, 12)
 	h.press("tab", "esc", "q")
 	if h.quit {
-		t.Error("Esc or q quit in the player view")
+		t.Error("Esc or q quit in the queue view")
 	}
 }
 
 func TestBrowse(t *testing.T) {
 	h := newHarness(t, 80, 12)
-	h.want("Library ▸ Artists", "Brian Eno", "David Byrne", "Żywiołak", "■ stopped", "? help")
+	h.want("Library │ Queue   Artists", "Brian Eno", "David Byrne", "Żywiołak", "■ stopped", "? help")
 	h.wantNot("No Albums")
 
 	h.press("enter") // Brian Eno
-	h.want("Library ▸ Artists ▸ Brian Eno", "1975  Another Day")
+	h.want("Library │ Queue   Artists ▸ Brian Eno", "1975  Another Day")
 	h.press("down", "enter") // Ambient 1: Enter opens an album, as in Kodi
 	h.want("Brian Eno ▸ Ambient 1", "01  1/1", "17:01")
 	if playing, _, _ := h.kodi.Playing(); playing {
@@ -92,7 +92,7 @@ func TestBrowse(t *testing.T) {
 		t.Errorf("selected %q after going back", got)
 	}
 	h.press("right", "backspace", "esc")
-	h.want("Library ▸ Artists")
+	h.want("Library │ Queue   Artists")
 	if got := h.selected(); !strings.HasPrefix(got, "Brian Eno") {
 		t.Errorf("selected %q", got)
 	}

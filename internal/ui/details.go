@@ -83,7 +83,7 @@ type (
 // highlighted returns the item under the cursor, and a fallback title for
 // it while its details load.
 func (m *Model) highlighted() (itemKey, string, bool) {
-	if m.view == playerView {
+	if m.view == queueView {
 		if len(m.queue) == 0 || m.queue[m.queueList.index].ID <= 0 {
 			return itemKey{}, "", false
 		}
@@ -126,7 +126,8 @@ func (m *Model) shown() *details {
 }
 
 // layout returns the width of the list and of the details pane (0 for
-// none), which share the screen with a one-column divider.
+// none), which share the screen with a one-column divider: the pane on the
+// left, the list on the right.
 func (m *Model) layout() (list, pane int) {
 	w := m.width
 	if m.paneHidden || !m.paneFits() {
@@ -424,11 +425,12 @@ func (m *Model) detailsLines(w, height int) []string {
 	if ok {
 		if s, done := m.cachedArt(d.image, cols, rows); done {
 			for _, l := range strings.Split(s, "\n") {
-				emit(strings.Repeat(" ", max(0, (inner-ansi.StringWidth(l))/2)) + l)
+				emit(l) // left-aligned, like the text below
+
 			}
 		} else {
 			for _, l := range placeholder(min(cols, 2*rows), rows) {
-				emit(line(inner, t.plain, []span{{strings.Repeat(" ", max(0, (inner-min(cols, 2*rows))/2)) + l, t.dim}}, nil))
+				emit(line(inner, t.plain, []span{{l, t.dim}}, nil))
 			}
 		}
 		emit("")

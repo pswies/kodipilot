@@ -8,7 +8,7 @@ x, `.` `,`, `+` `-`, F8, Tab), and starting a track queues the rest of its album
 as Kodi does.
 
 ```
- Player ▸ Queue                                  2/4 · repeat all · shuffle off
+ Library │ Queue                                 2/4 · repeat all · shuffle off
     1  1/1  · Brian Eno                                                   17:01
   ▶ 2  2/1  · Brian Eno                                                   08:55
     3  1/2  · Br╭──────────────────────────────────────────────╮          11:52
@@ -20,8 +20,8 @@ as Kodi does.
  ? help  Tab view  Enter open  p play  q queue  Space pause  +/- volume  Q quit
 ```
 
-- **Library** and **Player** views, switched with Tab. The library plays or
-  queues a whole artist, an album or a track; the player view shows Kodi's queue
+- **Library** and **Queue** views, tabs switched with Tab. The library plays or
+  queues a whole artist, an album or a track; the queue view shows Kodi's queue
   in play order and lets you jump, remove, reorder and clear.
 - Pause, stop, next and previous, seek, volume, mute, repeat and shuffle work in
   both views.
@@ -110,7 +110,7 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | Key | Action | Kodi |
 |---|---|---|
 | ↑ ↓ PgUp PgDn Home End | move | ↑ ↓ PgUp PgDn Home End |
-| Tab | switch Library ⇄ Player | Tab |
+| Tab | switch Library ⇄ Queue | Tab |
 | Space | pause / resume | Space |
 | x | stop | X |
 | . / , | next / previous track | . / , |
@@ -132,7 +132,7 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | p | play: artist, album, or album from the track | P |
 | q | add to the queue | Q |
 
-**Player**
+**Queue**
 
 | Key | Action | Kodi |
 |---|---|---|
@@ -148,7 +148,7 @@ playing. Kodi refuses to remove the playing item, and so does kodipilot.
 
 ## Details pane
 
-On terminals at least 90 columns wide and 14 rows tall, a pane beside the list
+On terminals at least 90 columns wide and 14 rows tall, a pane left of the list
 shows the highlighted item. On 120 columns and more the list takes a quarter of
 the width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
 it opens the details full-screen instead (Esc, `←` or `i` close them).

@@ -1,5 +1,5 @@
 // Package ui is kodipilot's Bubble Tea model: a library browser (album
-// artists → albums → tracks) and a player view of Kodi's play queue, with a
+// artists → albums → tracks) and a queue view of Kodi's play queue, with a
 // status line and help, volume and confirmation pop-ups. The key table in
 // keys.go binds every key.
 //
@@ -33,7 +33,7 @@ type viewKind int
 
 const (
 	libraryView viewKind = iota
-	playerView
+	queueView
 )
 
 type levelKind int
@@ -320,7 +320,7 @@ func (m *Model) confirmKey(key string) tea.Cmd {
 // farAway is a cursor move that reaches either end of any list.
 const farAway = 1 << 30
 
-// Key handlers, bound in the key table. Library and Player handlers are
+// Key handlers, bound in the key table. Library and Queue handlers are
 // bound only in their view.
 
 func (m *Model) up() tea.Cmd       { m.move(-1); return nil }
@@ -338,11 +338,11 @@ func (m *Model) openHelp() tea.Cmd {
 }
 
 func (m *Model) switchView() tea.Cmd {
-	if m.view == playerView {
+	if m.view == queueView {
 		m.view = libraryView
 		return nil
 	}
-	m.view = playerView
+	m.view = queueView
 	return m.refresh() // fetch the queue now
 }
 
@@ -547,7 +547,7 @@ func (m *Model) current() *level {
 func (m *Model) listHeight() int { return max(0, m.height-3) }
 
 func (m *Model) move(delta int) {
-	if m.view == playerView {
+	if m.view == queueView {
 		m.queueList.move(delta, len(m.queue))
 	} else if l := m.current(); l != nil {
 		l.list.move(delta, l.len())
@@ -600,14 +600,14 @@ func (m *Model) refresh() tea.Cmd {
 	return m.poll()
 }
 
-// poll fetches the status, the volume and, in the player view, the queue.
+// poll fetches the status, the volume and, in the queue view, the queue.
 func (m *Model) poll() tea.Cmd {
 	if m.polling {
 		m.pollAgain = true
 		return nil
 	}
 	m.polling = true
-	actions, withQueue := m.actions, m.view == playerView
+	actions, withQueue := m.actions, m.view == queueView
 	return m.command(func(ctx context.Context) tea.Msg {
 		msg := pollMsg{actions: actions, withQueue: withQueue}
 		if msg.status, msg.err = m.player.NowPlaying(ctx); msg.err != nil {

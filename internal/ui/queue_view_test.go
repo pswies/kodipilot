@@ -5,10 +5,13 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/pswies/kodipilot/internal/kodi/koditest"
 )
 
-// queueHarness plays Ambient 1 from track 3 and shows the player view.
+// queueHarness plays Ambient 1 from track 3 and shows the queue view.
 func queueHarness(t *testing.T) *harness {
 	h := newHarness(t, 80, 12)
 	h.press("enter", "down", "enter", "down", "down", "p")
@@ -30,17 +33,17 @@ func (h *harness) wantSelected(prefix string) {
 	}
 }
 
-func TestPlayerView(t *testing.T) {
+func TestQueueView(t *testing.T) {
 	h := newHarness(t, 80, 12)
 	h.press("tab")
-	h.want("Player ▸ Queue", "queue is empty — pick something in the library (Tab)")
+	h.want("Library │ Queue", "queue is empty — pick something in the library (Tab)")
 	h.press("tab")
-	h.want("Library ▸ Artists")
+	h.want("Library │ Queue   Artists")
 
 	h.press("enter", "down", "enter", "down", "down", "p")
 	h.kodi.SetModes("all", true)
 	h.press("tab")
-	h.want("Player ▸ Queue", "3/4 · repeat all · shuffle on", "1  1/1", "4  2/2", "⟳ all  ⤮")
+	h.want("Library │ Queue", "3/4 · repeat all · shuffle on", "1  1/1", "4  2/2", "⟳ all  ⤮")
 	h.wantSelected("▶ 3  1/2") // the cursor starts on the playing item
 
 	// The cursor follows the playing item while it is on it.
@@ -61,11 +64,11 @@ func TestPlayerView(t *testing.T) {
 
 	// The library keeps its cursor.
 	h.press("tab")
-	h.want("Library ▸ Artists ▸ Brian Eno ▸ Ambient 1")
+	h.want("Library │ Queue   Artists ▸ Brian Eno ▸ Ambient 1")
 	h.wantSelected("03  1/2")
 }
 
-func TestPlayerViewSeeks(t *testing.T) {
+func TestQueueViewSeeks(t *testing.T) {
 	h := queueHarness(t)
 	h.press("right", "right", "left")
 	h.want("▶ 03:42/11:52")
@@ -76,7 +79,7 @@ func TestPlayerViewSeeks(t *testing.T) {
 	}
 }
 
-func TestPlayerViewStartsWhenStopped(t *testing.T) {
+func TestQueueViewStartsWhenStopped(t *testing.T) {
 	h := queueHarness(t)
 	h.press("x", "home", "enter")
 	if playing, _, pos := h.kodi.Playing(); !playing || pos != 0 {
@@ -154,4 +157,52 @@ func TestQueueCursorKeepsItem(t *testing.T) {
 	}
 	h.advance(pollInterval)
 	h.wantSelected("2  1/2")
+}
+
+func (h *harness) header() string {
+	return strings.Split(h.m.render(), "\n")[0]
+}
+
+func TestHeaderTabs(t *testing.T) {
+	h := newHarness(t, 80, 12)
+	h.press("enter")
+	if got := strings.TrimSpace(h.screen()[0]); !strings.HasPrefix(got, "Library │ Queue   Artists ▸ Brian Eno") || !strings.HasSuffix(got, "1/5") {
+		t.Errorf("library header %q", got)
+	}
+	strong, dim := h.m.theme.strong, h.m.theme.dim
+	if raw := h.header(); !strings.Contains(raw, strong.Render("Library")) || !strings.Contains(raw, dim.Render("Queue")) {
+		t.Errorf("Library is not the highlighted tab: %q", raw)
+	}
+
+	h.press("left", "p", "tab")
+	got := strings.TrimSpace(h.screen()[0])
+	if !strings.HasPrefix(got, "Library │ Queue") || strings.Contains(got, "▸") || strings.Contains(got, "Artists") {
+		t.Errorf("queue header %q", got)
+	}
+	if !strings.HasSuffix(got, "1/8 · repeat off · shuffle off") {
+		t.Errorf("queue header lacks the position: %q", got)
+	}
+	if raw := h.header(); !strings.Contains(raw, dim.Render("Library")) || !strings.Contains(raw, strong.Render("Queue")) {
+		t.Errorf("Queue is not the highlighted tab: %q", raw)
+	}
+}
+
+func TestHeaderNarrow(t *testing.T) {
+	h := newHarness(t, 40, 12)
+	for width, want := range map[int]string{
+		40: " Library │ Queue   Artists          1/3 ", // full tabs
+		25: " L │ Q   Artists     1/3 ",                // short tabs before the breadcrumb is cut
+		12: " L │ Q   Ar…",                             // then the position goes and the breadcrumb is cut
+	} {
+		h.send(tea.WindowSizeMsg{Width: width, Height: 12})
+		if got := h.screen()[0]; got != want {
+			t.Errorf("width %d: %q, want %q", width, got, want)
+		}
+	}
+	for width := range 41 {
+		h.send(tea.WindowSizeMsg{Width: width, Height: 12})
+		if got := ansi.StringWidth(h.header()); got > width {
+			t.Errorf("width %d: header is %d wide", width, got)
+		}
+	}
 }
