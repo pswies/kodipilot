@@ -24,7 +24,7 @@ type scope int
 const (
 	everywhere scope = iota
 	inLibrary
-	inPlayer
+	inQueue
 )
 
 // keySection is a part of the key table that applies in one scope.
@@ -68,7 +68,7 @@ func keyTable() []keySection {
 				bind((*Model).up, "up"), bind((*Model).down, "down"),
 				bind((*Model).pageUp, "pgup"), bind((*Model).pageDown, "pgdown"),
 				bind((*Model).home, "home"), bind((*Model).end, "end"))},
-			{"Tab", "switch Library ⇄ Player", "Tab", bind((*Model).switchView, "tab", "shift+tab")},
+			{"Tab", "switch Library ⇄ Queue", "Tab", bind((*Model).switchView, "tab", "shift+tab")},
 			{"Space", "pause / resume", "Space", bind((*Model).pause, "space")},
 			{"x", "stop", "X", bind((*Model).stop, "x")},
 			{". / ,", "next / previous track", ". / ,", slices.Concat(
@@ -91,7 +91,7 @@ func keyTable() []keySection {
 			{"p", "play: artist, album, or album from the track", "P", bind((*Model).play, "p")},
 			{"q", "add to the queue", "Q", bind((*Model).enqueue, "q")},
 		}},
-		{"Player", inPlayer, []keyRow{
+		{"Queue", inQueue, []keyRow{
 			{"Enter, p", "play the selected item", "Enter, P", bind((*Model).playSelected, "enter", "p")},
 			{"← / →", "seek back / forward", "← / → while playing", slices.Concat(
 				bind((*Model).seekBack, "left"), bind((*Model).seekForward, "right"))},
@@ -106,8 +106,8 @@ func keyTable() []keySection {
 // handler returns the handler of key in view, or nil.
 func handler(table []keySection, view viewKind, key string) func(*Model) tea.Cmd {
 	in := inLibrary
-	if view == playerView {
-		in = inPlayer
+	if view == queueView {
+		in = inQueue
 	}
 	for _, section := range table {
 		if section.scope != everywhere && section.scope != in {

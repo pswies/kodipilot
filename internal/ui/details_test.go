@@ -75,9 +75,15 @@ func TestLayout(t *testing.T) {
 
 func TestPaneToggle(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "")
-	h.want("│ Brian Eno", "Biography")
+	h.want("Biography")
+	if l := h.screen()[1]; !strings.Contains(l, "│▌ Brian Eno") {
+		t.Errorf("no pane left of the list: %q", l)
+	}
 	h.press("i")
-	h.wantNot("Biography", "│")
+	h.wantNot("Biography")
+	if strings.Contains(h.screen()[1], "│") {
+		t.Errorf("divider without the pane: %q", h.screen()[1])
+	}
 	h.press("i")
 	h.want("Biography")
 }
@@ -145,7 +151,7 @@ func TestTrackDetails(t *testing.T) {
 	// The queue shows the details of its items too.
 	h.press("p", "tab")
 	h.advance(detailsDelay)
-	h.want("Player ▸ Queue", "Duration  17:01")
+	h.want("Library │ Queue", "Duration  17:01")
 }
 
 func TestDetailsDebounced(t *testing.T) {
@@ -191,16 +197,26 @@ func TestCover(t *testing.T) {
 		t.Errorf("no cover art:\n%s", screen)
 	}
 	h.want("Brian Eno", "Biography")
-	art, _ := h.m.layout()
-	if lines := h.screen(); !strings.Contains(lines[1][art:], "│") {
-		t.Errorf("no divider: %q", lines[1])
+
+	// The pane is on the left, the image at its left edge (after the
+	// one-column margin), and the list right of the divider.
+	list, pane := h.m.layout()
+	row := strings.Split(h.m.render(), "\n")[1]
+	if !strings.HasPrefix(row, " \x1b[") {
+		t.Errorf("the image does not start at the pane's left edge: %q", row)
 	}
+	plain := []rune(ansi.Strip(row))
+	if len(plain) != pane+1+list || plain[pane] != '│' || !strings.HasPrefix(string(plain[pane+1:]), "▌ Brian Eno") {
+		t.Errorf("row %q: want the pane in %d columns, │, then the list", string(plain), pane)
+	}
+	// The text below the image starts at the same edge.
+	h.want("\n Brian Eno")
 }
 
 func TestMissingCover(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "/no/such/cover.jpg")
 	// No image: the text starts at the top of the pane.
-	if l := h.screen()[1]; !strings.Contains(l, "│ Brian Eno") {
+	if l := h.screen()[1]; !strings.HasPrefix(l, " Brian Eno") {
 		t.Errorf("first pane line %q", l)
 	}
 	h.wantNot("loading")
