@@ -28,7 +28,7 @@ func TestHelpAndVersion(t *testing.T) {
 
 func TestBadArguments(t *testing.T) {
 	var out, errOut bytes.Buffer
-	for _, args := range [][]string{{"--password", "x"}, {"extra"}, {"--port", "x"}} {
+	for _, args := range [][]string{{"--password", "x"}, {"extra"}, {"--port", "x"}, {"--art", "sixel"}} {
 		if err := run(args, &out, &errOut); err == nil {
 			t.Errorf("%v: no error", args)
 		}

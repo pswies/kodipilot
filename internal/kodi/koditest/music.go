@@ -2,7 +2,9 @@ package koditest
 
 import (
 	"encoding/json"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/pswies/kodipilot/internal/kodi"
@@ -72,6 +74,7 @@ type Music struct {
 
 	mu       sync.Mutex
 	video    bool
+	cover    string // art URL of every album, and of artist 1
 	playing  bool
 	paused   bool
 	position int
@@ -144,6 +147,9 @@ func NewMusic() *Music {
 	m.handle("Application.GetProperties", func(json.RawMessage) any {
 		return map[string]any{"volume": m.volume.Level, "muted": m.volume.Muted}
 	})
+	m.handle("AudioLibrary.GetArtistDetails", m.artistDetails)
+	m.handle("AudioLibrary.GetAlbumDetails", m.albumDetails)
+	m.handle("AudioLibrary.GetSongDetails", m.songDetails)
 	m.handle("Application.SetVolume", func(raw json.RawMessage) any {
 		var p struct{ Volume int }
 		json.Unmarshal(raw, &p)
@@ -151,6 +157,14 @@ func NewMusic() *Music {
 		return p.Volume
 	})
 	return m
+}
+
+// SetCover makes every album, and Brian Eno, have the image at path, as a
+// Kodi art URL.
+func (m *Music) SetCover(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cover = "image://" + strings.ReplaceAll(url.QueryEscape(path), "+", "%20") + "/"
 }
 
 // SetVideo starts or stops a fake video player.
@@ -371,4 +385,76 @@ func speed(paused bool) int {
 // globalTime returns seconds as Kodi's Global.Time.
 func globalTime(seconds int) map[string]int {
 	return map[string]int{"hours": seconds / 3600, "minutes": seconds / 60 % 60, "seconds": seconds % 60}
+}
+
+// artistDetails knows a lot about Brian Eno and nothing about the others.
+func (m *Music) artistDetails(raw json.RawMessage) any {
+	var p struct{ ArtistID int }
+	json.Unmarshal(raw, &p)
+	d := map[string]any{"artistid": p.ArtistID, "label": "", "genre": []string{}, "art": map[string]string{}}
+	if p.ArtistID == 1 {
+		d["description"] = "English musician, composer and record producer.\n\nA pioneer of ambient music."
+		d["genre"] = []string{"Ambient", "Electronic"}
+		d["born"] = "1948-05-15"
+		d["yearsactive"] = []string{"1970s", "2020s"}
+		if m.cover != "" {
+			d["art"] = map[string]string{"thumb": m.cover}
+		}
+	}
+	return map[string]any{"artistdetails": d}
+}
+
+// albumDetails gives every album a cover (when set); Ambient 1 has more.
+func (m *Music) albumDetails(raw json.RawMessage) any {
+	var p struct{ AlbumID int }
+	json.Unmarshal(raw, &p)
+	d := map[string]any{"albumid": p.AlbumID, "genre": []string{}, "art": map[string]string{}}
+	for _, a := range Albums() {
+		if a.ID == p.AlbumID {
+			d["title"], d["year"], d["displayartist"] = a.Title, a.Year, a.DisplayArtist
+		}
+	}
+	if m.cover != "" {
+		d["art"] = map[string]string{"thumb": m.cover}
+		d["thumbnail"] = m.cover
+	}
+	if p.AlbumID == 11 {
+		d["genre"] = []string{"Ambient"}
+		d["albumlabel"] = "Polydor"
+		d["releasetype"] = "album"
+		d["albumduration"] = 2628
+		d["totaldiscs"] = 1
+		d["description"] = "Four pieces for airports."
+	}
+	return map[string]any{"albumdetails": d}
+}
+
+// songDetails gives song 102 the full set of details.
+func (m *Music) songDetails(raw json.RawMessage) any {
+	var p struct{ SongID int }
+	json.Unmarshal(raw, &p)
+	s := m.song(p.SongID)
+	d := map[string]any{
+		"songid": s.ID, "title": s.Title, "track": s.Track, "disc": s.Disc, "duration": s.Duration,
+		"artist": []string{s.DisplayArtist}, "genre": []string{}, "art": map[string]string{},
+	}
+	if m.cover != "" {
+		d["art"] = map[string]string{"album.thumb": m.cover}
+	}
+	if p.SongID == 102 {
+		d["album"] = "Ambient 1"
+		d["year"] = 1978
+		d["genre"] = []string{"Ambient"}
+		d["displaycomposer"] = "Brian Eno"
+		d["userrating"] = 8
+		d["playcount"] = 3
+		d["lastplayed"] = "2026-11-01 21:00:00"
+		d["bitrate"] = 1411
+		d["samplerate"] = 44100
+		d["channels"] = 2
+		d["comment"] = "Remastered."
+		d["lyrics"] = "(instrumental)"
+		d["file"] = "/pub/music/Brian Eno/Ambient 1/02.flac"
+	}
+	return map[string]any{"songdetails": d}
 }

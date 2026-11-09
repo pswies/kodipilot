@@ -80,6 +80,7 @@ func keyTable() []keySection {
 			{"F8, m", "mute on / off", "F8", bind((*Model).mute, "f8", "m")},
 			{"r", "repeat: off → all → one → off", "", bind((*Model).cycleRepeat, "r")},
 			{"s", "shuffle on / off", "", bind((*Model).toggleShuffle, "s")},
+			{"i", "details: show / hide (full screen when narrow)", "I", bind((*Model).toggleDetails, "i")},
 			{"? / h", "this help", "", bind((*Model).openHelp, "?", "h")},
 			{"Q, ctrl+c", "quit (the music keeps playing)", "", bind((*Model).quit, "Q", "ctrl+c")},
 		}},

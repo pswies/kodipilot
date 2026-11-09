@@ -159,3 +159,115 @@ func yearOrLast(year int) int {
 	}
 	return year
 }
+
+// The properties requested for details. Kodi rejects a whole request that
+// names a property it does not know, so these are exactly the ones Kodi's
+// JSON-RPC API (v13) defines for each kind.
+var (
+	artistDetailProperties = []string{
+		"description", "genre", "style", "born", "formed", "yearsactive", "thumbnail", "fanart", "art",
+	}
+	albumDetailProperties = []string{
+		"title", "displayartist", "description", "genre", "style", "mood", "albumlabel", "year",
+		"releasetype", "albumduration", "totaldiscs", "thumbnail", "art",
+	}
+	songDetailProperties = []string{
+		"title", "artist", "album", "year", "genre", "duration", "track", "disc", "rating", "userrating",
+		"playcount", "lastplayed", "comment", "lyrics", "file", "bitrate", "samplerate", "channels",
+		"displaycomposer", "mood", "thumbnail", "art",
+	}
+)
+
+// ArtistDetails is what Kodi knows about an artist besides the name.
+type ArtistDetails struct {
+	Description string            `json:"description"`
+	Genre       []string          `json:"genre"`
+	Style       []string          `json:"style"`
+	Born        string            `json:"born"`
+	Formed      string            `json:"formed"`
+	YearsActive []string          `json:"yearsactive"`
+	Thumbnail   string            `json:"thumbnail"`
+	Fanart      string            `json:"fanart"`
+	Art         map[string]string `json:"art"`
+}
+
+// Image returns the art URL of the artist's image, or "".
+func (a ArtistDetails) Image() string { return cmp.Or(a.Art["thumb"], a.Thumbnail) }
+
+// AlbumDetails is what Kodi knows about an album.
+type AlbumDetails struct {
+	Title         string            `json:"title"`
+	DisplayArtist string            `json:"displayartist"`
+	Description   string            `json:"description"` // the review
+	Genre         []string          `json:"genre"`
+	Style         []string          `json:"style"`
+	Mood          []string          `json:"mood"`
+	Label         string            `json:"albumlabel"` // the record label
+	Year          int               `json:"year"`
+	ReleaseType   string            `json:"releasetype"`
+	Duration      int               `json:"albumduration"` // seconds
+	TotalDiscs    int               `json:"totaldiscs"`
+	Thumbnail     string            `json:"thumbnail"`
+	Art           map[string]string `json:"art"`
+}
+
+// Image returns the art URL of the album's cover, or "".
+func (a AlbumDetails) Image() string { return cmp.Or(a.Art["thumb"], a.Thumbnail) }
+
+// SongDetails is what Kodi knows about a song.
+type SongDetails struct {
+	Title      string            `json:"title"`
+	Artist     []string          `json:"artist"`
+	Album      string            `json:"album"`
+	Year       int               `json:"year"`
+	Genre      []string          `json:"genre"`
+	Mood       []string          `json:"mood"`
+	Duration   int               `json:"duration"` // seconds
+	Track      int               `json:"track"`
+	Disc       int               `json:"disc"`
+	Rating     float64           `json:"rating"`     // 0–10
+	UserRating int               `json:"userrating"` // 0–10
+	PlayCount  int               `json:"playcount"`
+	LastPlayed string            `json:"lastplayed"`
+	Comment    string            `json:"comment"`
+	Lyrics     string            `json:"lyrics"`
+	File       string            `json:"file"`
+	Bitrate    int               `json:"bitrate"`    // kbit/s
+	SampleRate int               `json:"samplerate"` // Hz
+	Channels   int               `json:"channels"`
+	Composer   string            `json:"displaycomposer"`
+	Thumbnail  string            `json:"thumbnail"`
+	Art        map[string]string `json:"art"`
+}
+
+// Image returns the art URL of the song's album cover, or "".
+func (s SongDetails) Image() string {
+	return cmp.Or(s.Art["album.thumb"], s.Art["thumb"], s.Thumbnail)
+}
+
+// ArtistDetails fetches the details of an artist.
+func (l *Library) ArtistDetails(ctx context.Context, artistID int) (ArtistDetails, error) {
+	var result struct{ ArtistDetails ArtistDetails }
+	err := l.client.Call(ctx, "AudioLibrary.GetArtistDetails", map[string]any{
+		"artistid": artistID, "properties": artistDetailProperties,
+	}, &result)
+	return result.ArtistDetails, err
+}
+
+// AlbumDetails fetches the details of an album.
+func (l *Library) AlbumDetails(ctx context.Context, albumID int) (AlbumDetails, error) {
+	var result struct{ AlbumDetails AlbumDetails }
+	err := l.client.Call(ctx, "AudioLibrary.GetAlbumDetails", map[string]any{
+		"albumid": albumID, "properties": albumDetailProperties,
+	}, &result)
+	return result.AlbumDetails, err
+}
+
+// SongDetails fetches the details of a song.
+func (l *Library) SongDetails(ctx context.Context, songID int) (SongDetails, error) {
+	var result struct{ SongDetails SongDetails }
+	err := l.client.Call(ctx, "AudioLibrary.GetSongDetails", map[string]any{
+		"songid": songID, "properties": songDetailProperties,
+	}, &result)
+	return result.SongDetails, err
+}

@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // View renders the screen: a header, the list, the status line and the
@@ -28,7 +29,7 @@ func (m *Model) render() string {
 	}
 	lines := make([]string, 0, h)
 	lines = append(lines, m.header(w))
-	lines = append(lines, m.body(w, m.listHeight())...)
+	lines = append(lines, m.middle(w, m.listHeight())...)
 	lines = append(lines, m.statusLine(w), m.footer(w))
 	screen := strings.Join(lines[:min(h, len(lines))], "\n")
 
@@ -40,6 +41,30 @@ func (m *Model) render() string {
 	canvas := lipgloss.NewCanvas(w, h)
 	canvas.Compose(lipgloss.NewCompositor(lipgloss.NewLayer(screen), lipgloss.NewLayer(popup).X(x).Y(y)))
 	return canvas.Render()
+}
+
+// middle renders the rows between the header and the status line: the
+// list, beside it the details pane, or the full-screen details.
+func (m *Model) middle(w, height int) []string {
+	if m.fullDetails() {
+		return m.detailsLines(w, height)
+	}
+	list, pane := m.layout()
+	rows := m.body(list, height)
+	if pane == 0 {
+		return rows
+	}
+	details := m.detailsLines(pane, height)
+	divider := m.theme.dim.Render("│")
+	for i := range rows {
+		rows[i] = fill(rows[i], list) + divider + details[i]
+	}
+	return rows
+}
+
+// fill pads a rendered line with spaces to w columns.
+func fill(s string, w int) string {
+	return s + strings.Repeat(" ", max(0, w-ansi.StringWidth(s)))
 }
 
 func (m *Model) header(w int) string {
