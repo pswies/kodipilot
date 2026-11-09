@@ -124,6 +124,20 @@ func (l *Library) Songs(ctx context.Context, albumID int) ([]Song, error) {
 	return songs, nil
 }
 
+// ArtistSongs returns the songs of all albums of an album artist, album
+// after album in display order.
+func (l *Library) ArtistSongs(ctx context.Context, artistID int) ([]Song, error) {
+	var all []Song
+	for _, album := range l.Albums(artistID) {
+		songs, err := l.Songs(ctx, album.ID)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, songs...)
+	}
+	return all, nil
+}
+
 func compareAlbums(a, b Album) int {
 	return cmp.Or(
 		cmp.Compare(yearOrLast(a.Year), yearOrLast(b.Year)),

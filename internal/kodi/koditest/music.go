@@ -2,6 +2,7 @@ package koditest
 
 import (
 	"encoding/json"
+	"slices"
 	"sync"
 
 	"github.com/pswies/kodipilot/internal/kodi"
@@ -62,8 +63,10 @@ func Songs(albumID int) []kodi.Song {
 }
 
 // Music is a Fake that behaves like Kodi with the fake library loaded: it
-// keeps a music playlist, an audio player, an optional video player and a
-// mixer, and answers the methods kodipilot uses accordingly.
+// keeps a music playlist, an audio player with repeat and shuffle modes, an
+// optional video player and a mixer, and answers the methods kodipilot uses
+// accordingly. Like Kodi, it refuses to remove the playing item. Unlike Kodi,
+// clearing the playlist stops playback, and shuffle does not reorder it.
 type Music struct {
 	*Fake
 
@@ -72,6 +75,7 @@ type Music struct {
 	playing  bool
 	paused   bool
 	position int
+	elapsed  int   // seconds into the playing song
 	queue    []int // song ids
 	repeat   string
 	shuffled bool
@@ -90,8 +94,43 @@ func NewMusic() *Music {
 	})
 	m.handle("Player.GetActivePlayers", m.activePlayers)
 	m.handle("Player.Stop", m.stop)
-	m.handle("Playlist.Clear", func(json.RawMessage) any { m.queue = nil; return "OK" })
+	m.handle("Playlist.Clear", func(json.RawMessage) any {
+		m.queue, m.playing, m.paused = nil, false, false
+		return "OK"
+	})
 	m.handle("Playlist.Add", m.add)
+	m.Handle("Playlist.Remove", m.remove)
+	m.handle("Playlist.Swap", m.swap)
+	m.handle("Player.Seek", m.seek)
+	m.handle("Player.SetRepeat", func(raw json.RawMessage) any {
+		var p struct{ Repeat string }
+		json.Unmarshal(raw, &p)
+		if p.Repeat == "cycle" {
+			p.Repeat = map[string]string{"off": "all", "all": "one", "one": "off"}[m.repeat]
+		}
+		m.repeat = p.Repeat
+		return "OK"
+	})
+	m.handle("Player.SetShuffle", func(raw json.RawMessage) any {
+		var p struct{ Shuffle any }
+		json.Unmarshal(raw, &p)
+		if on, ok := p.Shuffle.(bool); ok {
+			m.shuffled = on
+		} else {
+			m.shuffled = !m.shuffled
+		}
+		return "OK"
+	})
+	m.handle("Application.SetMute", func(raw json.RawMessage) any {
+		var p struct{ Mute any }
+		json.Unmarshal(raw, &p)
+		if on, ok := p.Mute.(bool); ok {
+			m.volume.Muted = on
+		} else {
+			m.volume.Muted = !m.volume.Muted
+		}
+		return m.volume.Muted
+	})
 	m.handle("Player.Open", m.open)
 	m.handle("Player.PlayPause", func(json.RawMessage) any {
 		m.paused = !m.paused
@@ -133,6 +172,13 @@ func (m *Music) SetModes(repeat string, shuffled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.repeat, m.shuffled = repeat, shuffled
+}
+
+// Modes returns the repeat mode and shuffle.
+func (m *Music) Modes() (repeat string, shuffled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.repeat, m.shuffled
 }
 
 // Playing reports whether audio plays (or is paused), and at which position.
@@ -200,7 +246,7 @@ func (m *Music) open(raw json.RawMessage) any {
 	var p struct{ Item struct{ Position int } }
 	json.Unmarshal(raw, &p)
 	if p.Item.Position < len(m.queue) {
-		m.playing, m.paused, m.position = true, false, p.Item.Position
+		m.playing, m.paused, m.position, m.elapsed = true, false, p.Item.Position, 192
 	}
 	return "OK"
 }
@@ -219,7 +265,52 @@ func (m *Music) goTo(raw json.RawMessage) any {
 		m.position = int(to)
 	}
 	m.position = max(0, min(m.position, len(m.queue)-1))
+	m.elapsed = 192
 	return "OK"
+}
+
+func (m *Music) remove(raw json.RawMessage) (any, error) {
+	var p struct{ Position int }
+	json.Unmarshal(raw, &p)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.Position < 0 || p.Position >= len(m.queue) || m.playing && p.Position == m.position {
+		return nil, &kodi.Error{Code: -32602, Message: "Invalid params."}
+	}
+	m.queue = slices.Delete(m.queue, p.Position, p.Position+1)
+	if m.playing && p.Position < m.position {
+		m.position--
+	}
+	return "OK", nil
+}
+
+func (m *Music) swap(raw json.RawMessage) any {
+	var p struct{ Position1, Position2 int }
+	json.Unmarshal(raw, &p)
+	a, b := p.Position1, p.Position2
+	if a < 0 || b < 0 || a >= len(m.queue) || b >= len(m.queue) {
+		return "OK"
+	}
+	m.queue[a], m.queue[b] = m.queue[b], m.queue[a]
+	switch m.position {
+	case a:
+		m.position = b
+	case b:
+		m.position = a
+	}
+	return "OK"
+}
+
+func (m *Music) seek(raw json.RawMessage) any {
+	var p struct{ Value struct{ Step string } }
+	json.Unmarshal(raw, &p)
+	switch p.Value.Step {
+	case "smallforward":
+		m.elapsed += 30
+	case "smallbackward":
+		m.elapsed = max(0, m.elapsed-30)
+	}
+	return map[string]any{"percentage": 0}
 }
 
 func (m *Music) song(id int) kodi.Song {
@@ -249,8 +340,8 @@ func (m *Music) properties(json.RawMessage) any {
 		total = m.song(m.queue[m.position]).Duration
 	}
 	return map[string]any{
-		"time":      map[string]int{"hours": 0, "minutes": 3, "seconds": 12},
-		"totaltime": map[string]int{"hours": total / 3600, "minutes": total / 60 % 60, "seconds": total % 60},
+		"time":      globalTime(m.elapsed),
+		"totaltime": globalTime(total),
 		"speed":     speed(m.paused),
 		"position":  m.position,
 		"repeat":    m.repeat,
@@ -263,7 +354,8 @@ func (m *Music) items(json.RawMessage) any {
 	for _, id := range m.queue {
 		s := m.song(id)
 		items = append(items, map[string]any{
-			"title": s.Title, "label": s.Title, "artist": []string{s.DisplayArtist}, "duration": s.Duration,
+			"id": s.ID, "type": "song", "title": s.Title, "label": s.Title,
+			"artist": []string{s.DisplayArtist}, "duration": s.Duration,
 		})
 	}
 	return map[string]any{"items": items}
@@ -274,4 +366,9 @@ func speed(paused bool) int {
 		return 0
 	}
 	return 1
+}
+
+// globalTime returns seconds as Kodi's Global.Time.
+func globalTime(seconds int) map[string]int {
+	return map[string]int{"hours": seconds / 3600, "minutes": seconds / 60 % 60, "seconds": seconds % 60}
 }

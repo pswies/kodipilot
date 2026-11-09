@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -14,243 +15,140 @@ import (
 	"github.com/pswies/kodipilot/internal/kodi/koditest"
 )
 
-// fakeClock is a manual Clock: timers fire when the test advances it.
-type fakeClock struct {
-	now    time.Time
-	timers []timer
+type errString string
+
+func (e errString) Error() string { return string(e) }
+
+func unavailable(json.RawMessage) (any, error) {
+	return nil, &kodi.UnavailableError{Addr: "127.0.0.1:9090", Err: errString("connection refused")}
 }
 
-type timer struct {
-	at  time.Time
-	msg tea.Msg
-}
-
-func (c *fakeClock) Now() time.Time { return c.now }
-
-func (c *fakeClock) After(d time.Duration, msg tea.Msg) tea.Cmd {
-	c.timers = append(c.timers, timer{c.now.Add(d), msg})
-	return nil
-}
-
-// harness drives a Model synchronously: commands run at once and their
-// messages are fed back, as Bubble Tea would.
-type harness struct {
-	t     *testing.T
-	m     *Model
-	kodi  *koditest.Music
-	clock *fakeClock
-	quit  bool
-}
-
-func newHarness(t *testing.T, width, height int) *harness {
-	t.Helper()
-	h := &harness{
-		t:     t,
-		kodi:  koditest.NewMusic(),
-		clock: &fakeClock{now: time.Date(2026, 11, 9, 20, 0, 0, 0, time.UTC)},
-	}
-	h.m = New(h.kodi, h.clock)
-	h.send(tea.WindowSizeMsg{Width: width, Height: height})
-	h.run(h.m.Init())
-	return h
-}
-
-func (h *harness) send(msg tea.Msg) {
-	_, cmd := h.m.Update(msg)
-	h.run(cmd)
-}
-
-func (h *harness) run(cmd tea.Cmd) {
-	if cmd == nil {
-		return
-	}
-	switch msg := cmd().(type) {
-	case nil:
-	case tea.BatchMsg:
-		for _, c := range msg {
-			h.run(c)
-		}
-	case tea.QuitMsg:
-		h.quit = true
-	default:
-		h.send(msg)
-	}
-}
-
-// advance moves the clock on and fires the timers that are due.
-func (h *harness) advance(d time.Duration) {
-	h.clock.now = h.clock.now.Add(d)
-	for {
-		i := slices.IndexFunc(h.clock.timers, func(t timer) bool { return !t.at.After(h.clock.now) })
-		if i < 0 {
-			return
-		}
-		msg := h.clock.timers[i].msg
-		h.clock.timers = slices.Delete(h.clock.timers, i, i+1)
-		h.send(msg)
-	}
-}
-
-func keyMsg(name string) tea.KeyPressMsg {
-	codes := map[string]rune{
-		"up": tea.KeyUp, "down": tea.KeyDown, "left": tea.KeyLeft, "right": tea.KeyRight,
-		"pgup": tea.KeyPgUp, "pgdown": tea.KeyPgDown, "home": tea.KeyHome, "end": tea.KeyEnd,
-		"enter": tea.KeyEnter, "backspace": tea.KeyBackspace, "tab": tea.KeyTab, "esc": tea.KeyEscape,
-	}
-	switch {
-	case name == "space":
-		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
-	case name == "ctrl+c":
-		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
-	case codes[name] != 0:
-		return tea.KeyPressMsg{Code: codes[name]}
-	}
-	return tea.KeyPressMsg{Code: []rune(name)[0], Text: name}
-}
-
-func (h *harness) press(keys ...string) {
-	h.t.Helper()
-	for _, k := range keys {
-		msg := keyMsg(k)
-		if msg.String() != k {
-			h.t.Fatalf("key %q reads as %q", k, msg.String())
-		}
-		h.send(msg)
-	}
-}
-
-// screen returns the screen as plain text lines.
-func (h *harness) screen() []string {
-	return strings.Split(ansi.Strip(h.m.render()), "\n")
-}
-
-func (h *harness) contains(text string) bool {
-	return strings.Contains(strings.Join(h.screen(), "\n"), text)
-}
-
-func (h *harness) want(texts ...string) {
-	h.t.Helper()
-	for _, text := range texts {
-		if !h.contains(text) {
-			h.t.Errorf("screen lacks %q:\n%s", text, strings.Join(h.screen(), "\n"))
-		}
-	}
-}
-
-func (h *harness) wantNot(texts ...string) {
-	h.t.Helper()
-	for _, text := range texts {
-		if h.contains(text) {
-			h.t.Errorf("screen shows %q:\n%s", text, strings.Join(h.screen(), "\n"))
-		}
-	}
-}
-
-// selected returns the text of the selected row.
-func (h *harness) selected() string {
-	for _, l := range h.screen() {
-		if strings.HasPrefix(l, "▌") {
-			return strings.TrimSpace(strings.TrimPrefix(l, "▌"))
-		}
-	}
-	return ""
-}
-
-func (h *harness) count(method string) int {
-	n := 0
-	for _, m := range h.kodi.Methods() {
-		if m == method {
-			n++
-		}
-	}
-	return n
-}
-
-func TestWaitingForKodi(t *testing.T) {
+func waitingHarness(t *testing.T) *harness {
 	music := koditest.NewMusic()
-	music.Handle("AudioLibrary.GetArtists", func(json.RawMessage) (any, error) {
-		return nil, &kodi.UnavailableError{Addr: "127.0.0.1:9090", Err: errString("connection refused")}
-	})
+	music.Handle("AudioLibrary.GetArtists", unavailable)
 	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
 	h.m = New(music, h.clock)
 	h.send(tea.WindowSizeMsg{Width: 80, Height: 10})
 	h.run(h.m.Init())
+	return h
+}
+
+func TestWaitingForKodi(t *testing.T) {
+	h := waitingHarness(t)
 	h.want("waiting for Kodi…", "connection refused", "■ stopped")
 
 	h.advance(time.Second)
 	if n := h.count("AudioLibrary.GetArtists"); n != 2 {
 		t.Errorf("GetArtists called %d times, want 2 (a retry after a second)", n)
 	}
-	music.Reply("AudioLibrary.GetArtists", map[string]any{"artists": koditest.Artists()})
+	h.kodi.Reply("AudioLibrary.GetArtists", map[string]any{"artists": koditest.Artists()})
 	h.advance(time.Second)
 	h.want("Library ▸ Artists", "Brian Eno")
 	h.wantNot("waiting")
 }
 
-func TestQuitWhileWaiting(t *testing.T) {
-	music := koditest.NewMusic()
-	music.Handle("AudioLibrary.GetArtists", func(json.RawMessage) (any, error) {
-		return nil, &kodi.UnavailableError{Addr: "x", Err: errString("refused")}
-	})
-	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
-	h.m = New(music, h.clock)
-	h.run(h.m.Init())
-	h.press("q")
-	if !h.quit {
-		t.Error("q did not quit")
+func TestQuitKeys(t *testing.T) {
+	for _, keys := range [][]string{{"Q"}, {"ctrl+c"}, {"esc"}, {"enter", "esc", "esc"}, {"?", "ctrl+c"}} {
+		h := newHarness(t, 80, 12)
+		h.press(keys[:len(keys)-1]...)
+		if h.quit {
+			t.Fatalf("%v: quit early", keys)
+		}
+		h.press(keys[len(keys)-1])
+		if !h.quit {
+			t.Errorf("%v did not quit", keys)
+		}
+	}
+	for _, key := range []string{"Q", "esc"} {
+		h := waitingHarness(t)
+		h.press(key)
+		if !h.quit {
+			t.Errorf("%s did not quit while waiting for Kodi", key)
+		}
+	}
+	h := newHarness(t, 80, 12)
+	h.press("tab", "esc", "q")
+	if h.quit {
+		t.Error("Esc or q quit in the player view")
 	}
 }
 
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-func TestBrowseAndPlayTrack(t *testing.T) {
+func TestBrowse(t *testing.T) {
 	h := newHarness(t, 80, 12)
 	h.want("Library ▸ Artists", "Brian Eno", "David Byrne", "Żywiołak", "■ stopped", "? help")
 	h.wantNot("No Albums")
 
 	h.press("enter") // Brian Eno
 	h.want("Library ▸ Artists ▸ Brian Eno", "1975  Another Day")
-	h.press("down", "right") // Ambient 1
+	h.press("down", "enter") // Ambient 1: Enter opens an album, as in Kodi
 	h.want("Brian Eno ▸ Ambient 1", "01  1/1", "17:01")
-	h.press("down")
-	if got := h.selected(); !strings.HasPrefix(got, "02  2/1") {
-		t.Errorf("selected %q", got)
+	if playing, _, _ := h.kodi.Playing(); playing {
+		t.Error("Enter on an album started playback")
 	}
-	h.kodi.Reset()
-	h.press("enter")
-	if q := h.kodi.Queue(); !slices.Equal(q, []int{101, 102, 103, 104}) {
-		t.Errorf("queue = %v", q)
-	}
-	if playing, _, pos := h.kodi.Playing(); !playing || pos != 1 {
-		t.Errorf("playing %v at %d, want position 1", playing, pos)
-	}
-	h.want("▶ 03:12/08:55  Brian Eno – 2/1  [2/4]")
 
 	// Back keeps each level's cursor.
 	h.press("left")
-	h.want("Library ▸ Artists ▸ Brian Eno")
 	if got := h.selected(); !strings.Contains(got, "Ambient 1") {
 		t.Errorf("selected %q after going back", got)
 	}
-	h.press("backspace", "left")
+	h.press("right", "backspace", "esc")
 	h.want("Library ▸ Artists")
 	if got := h.selected(); !strings.HasPrefix(got, "Brian Eno") {
 		t.Errorf("selected %q", got)
 	}
 }
 
-func TestEnterOnAlbumPlaysFromStart(t *testing.T) {
+func TestEnterOnTrackPlaysAlbumFromIt(t *testing.T) {
+	for _, key := range []string{"enter", "right"} {
+		h := newHarness(t, 80, 12)
+		h.press("enter", "down", "enter", "down", key)
+		if q := h.kodi.Queue(); !slices.Equal(q, []int{101, 102, 103, 104}) {
+			t.Errorf("%s: queue = %v", key, q)
+		}
+		if playing, _, pos := h.kodi.Playing(); !playing || pos != 1 {
+			t.Errorf("%s: playing %v at %d, want position 1", key, playing, pos)
+		}
+		h.want("▶ 03:12/08:55  Brian Eno – 2/1  [2/4]")
+	}
+}
+
+func TestPlayKey(t *testing.T) {
 	h := newHarness(t, 80, 12)
-	h.press("enter", "down", "enter") // Brian Eno, Ambient 1
+	h.press("p") // Brian Eno: every album, in display order
+	if q := h.kodi.Queue(); !slices.Equal(q, []int{101, 102, 103, 104, 199, 200, 201, 202}) {
+		t.Errorf("artist: queue = %v", q)
+	}
+	h.press("enter", "down", "p") // Ambient 1 from track 1
 	if q := h.kodi.Queue(); !slices.Equal(q, []int{101, 102, 103, 104}) {
-		t.Errorf("queue = %v", q)
+		t.Errorf("album: queue = %v", q)
 	}
-	if _, _, pos := h.kodi.Playing(); pos != 0 {
-		t.Errorf("position %d, want 0", pos)
+	h.want("▶ 03:12/17:01  Brian Eno – 1/1  [1/4]")
+	h.press("enter", "end", "p") // the album from its last track
+	if _, _, pos := h.kodi.Playing(); pos != 3 {
+		t.Errorf("track: position %d, want 3", pos)
 	}
-	h.want("Library ▸ Artists ▸ Brian Eno", "▶ 03:12/17:01  Brian Eno – 1/1  [1/4]")
+}
+
+func TestQueueKey(t *testing.T) {
+	h := newHarness(t, 80, 12)
+	h.press("down", "q") // David Byrne
+	h.want("Queued 4 tracks: David Byrne")
+	h.press("up", "enter", "down", "q") // Ambient 1
+	h.want("Queued 4 tracks: Ambient 1")
+	h.press("enter", "down", "q") // track 2/1
+	h.want("Queued 1 track: 2/1")
+	want := []int{199, 200, 201, 202, 101, 102, 103, 104, 102}
+	if q := h.kodi.Queue(); !slices.Equal(q, want) {
+		t.Errorf("queue = %v, want %v", q, want)
+	}
+	if playing, _, _ := h.kodi.Playing(); playing {
+		t.Error("q started playback")
+	}
+	if slices.Contains(h.kodi.Methods(), "Playlist.Clear") {
+		t.Error("q cleared the queue")
+	}
+	h.advance(flashDuration)
+	h.wantNot("Queued")
 }
 
 func TestPageAndEnds(t *testing.T) {
@@ -272,32 +170,73 @@ func TestPageAndEnds(t *testing.T) {
 
 func TestPlaybackKeys(t *testing.T) {
 	h := newHarness(t, 80, 12)
-	h.press("enter", "down", "enter")
-	h.kodi.Reset()
+	h.press("enter", "down", "p")
 
 	h.press("space")
 	if _, paused, _ := h.kodi.Playing(); !paused {
-		t.Error("space did not pause")
+		t.Error("Space did not pause")
 	}
 	h.want("⏸ 03:12/17:01")
-	h.press("space", "n")
+	h.press("space", ".")
 	if _, paused, pos := h.kodi.Playing(); paused || pos != 1 {
 		t.Errorf("paused %v at %d", paused, pos)
 	}
-	h.press("p")
+	h.press(",")
 	if _, _, pos := h.kodi.Playing(); pos != 0 {
-		t.Errorf("position %d after p", pos)
+		t.Errorf("position %d after ,", pos)
 	}
-	h.press("s")
+	h.press("shift+right", "shift+right", "shift+left")
+	h.want("▶ 03:42/17:01")
+	h.press("x")
 	if playing, _, _ := h.kodi.Playing(); playing {
-		t.Error("s did not stop")
+		t.Error("x did not stop")
 	}
 	h.want("■ stopped")
-	for _, method := range []string{"Player.PlayPause", "Player.GoTo", "Player.Stop"} {
-		if h.count(method) == 0 {
-			t.Errorf("no %s call", method)
-		}
+}
+
+func TestRepeatShuffleMute(t *testing.T) {
+	h := newHarness(t, 80, 12)
+	h.press("enter", "down", "p")
+	h.wantNot("⟳", "⤮", "muted")
+	h.press("r")
+	h.want("⟳ all")
+	h.press("r")
+	h.want("⟳ one")
+	h.press("r")
+	h.wantNot("⟳")
+	h.press("s")
+	h.want("⤮")
+	h.press("s")
+	h.wantNot("⤮")
+
+	h.press("f8")
+	h.want("Volume  muted") // the pop-up
+	h.advance(popupDuration)
+	h.want("muted") // the status line
+	h.press("m")
+	h.want("Volume ▕", "50%")
+	h.advance(popupDuration)
+	h.wantNot("muted")
+	if v := h.kodi.Volume(); v.Muted {
+		t.Error("still muted in Kodi")
 	}
+}
+
+func TestNothingPlaying(t *testing.T) {
+	h := newHarness(t, 80, 12)
+	for _, key := range []string{"r", "s", "shift+right", "shift+left", "space", "x", ".", ","} {
+		h.kodi.Reset()
+		h.press(key)
+		h.want("nothing is playing")
+		for _, method := range h.kodi.Methods() {
+			if strings.HasPrefix(method, "Player.") && method != "Player.GetActivePlayers" {
+				t.Errorf("%s: called %s", key, method)
+			}
+		}
+		h.advance(flashDuration)
+	}
+	h.press("m") // mute works without a player
+	h.want("muted")
 }
 
 func TestVolumePopup(t *testing.T) {
@@ -327,53 +266,57 @@ func TestVolumePopup(t *testing.T) {
 }
 
 func TestHelp(t *testing.T) {
-	h := newHarness(t, 80, 30)
+	h := newHarness(t, 90, 40)
 	h.press("?")
-	for _, k := range keyTable() {
-		h.want(k.action)
-		if k.keys != "" {
-			h.want(k.keys)
+	for _, section := range keyTable() {
+		h.want(section.title)
+		for _, row := range section.rows {
+			h.want(row.label, row.action)
 		}
 	}
 	h.want("Author: Piotr Święs", "https://github.com/pswies/kodipilot")
+	h.wantNot("scroll")
 
 	h.kodi.Reset()
-	h.press("n", "enter", "tab", "+")
+	h.press(".", "enter", "tab", "+", "x", "p", "m", "esc")
 	if calls := h.kodi.Methods(); len(calls) > 0 {
 		t.Errorf("keys not ignored while help is open: %v", calls)
 	}
-	h.press("q")
-	if h.quit {
-		t.Fatal("q quit while help was open")
-	}
-	h.wantNot("Author")
-	h.press("h")
-	h.want("Author")
-	h.press("esc")
-	h.wantNot("Author")
-	h.press("?", "?")
-	h.wantNot("Author")
-	h.press("h", "h")
-	h.wantNot("Author")
-	h.press("q")
-	if !h.quit {
-		t.Error("q did not quit")
+	h.wantNot("Author") // Esc closed it
+	for _, keys := range [][]string{{"?", "?"}, {"h", "h"}, {"?", "q"}, {"h", "Q"}} {
+		h.press(keys[0])
+		h.want("Author")
+		h.press(keys[1])
+		h.wantNot("Author")
+		if h.quit {
+			t.Fatalf("%v quit", keys)
+		}
 	}
 }
 
-func TestCtrlCQuitsEvenInHelp(t *testing.T) {
-	h := newHarness(t, 80, 30)
-	h.press("?", "ctrl+c")
-	if !h.quit {
-		t.Error("ctrl+c did not quit")
-	}
+func TestHelpScrolls(t *testing.T) {
+	h := newHarness(t, 80, 20)
+	h.press("?")
+	h.want("Everywhere", "↑↓ scroll")
+	h.wantNot("Author")
+	h.press("end")
+	h.want("Author", "https://github.com/pswies/kodipilot")
+	h.wantNot("Everywhere")
+	h.press("pgup", "home")
+	h.want("Everywhere")
+	h.press("down")
+	h.wantNot("Everywhere")
+	h.press("up")
+	h.want("Everywhere")
 }
 
 func TestKeysHelp(t *testing.T) {
 	text := KeysHelp()
-	for _, k := range keyTable() {
-		if !strings.Contains(text, k.action) {
-			t.Errorf("--help lacks %q", k.action)
+	for _, section := range keyTable() {
+		for _, row := range section.rows {
+			if !strings.Contains(text, row.label) || !strings.Contains(text, row.action) {
+				t.Errorf("--help lacks %q %q", row.label, row.action)
+			}
 		}
 	}
 	for _, about := range aboutLines() {
@@ -383,56 +326,75 @@ func TestKeysHelp(t *testing.T) {
 	}
 }
 
-func TestPlayerView(t *testing.T) {
-	h := newHarness(t, 80, 12)
-	h.press("tab")
-	h.want("Player ▸ Queue", "queue is empty — pick something in the library (Tab)")
-	h.press("tab")
-	h.want("Library ▸ Artists")
-
-	h.press("enter", "down", "right", "down", "down", "enter") // Ambient 1 from track 3
-	h.kodi.SetModes("all", true)
-	h.press("tab")
-	h.want("Player ▸ Queue", "3/4 · repeat all · shuffle on", "1  1/1", "4  2/2")
-	if got := h.selected(); !strings.HasPrefix(got, "▶ 3  1/2") {
-		t.Errorf("selected %q, want the playing item", got)
+func TestReadmeShowsKeyTable(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The cursor follows the playing item while it is on it.
-	h.press("n")
-	if got := h.selected(); !strings.HasPrefix(got, "▶ 4  2/2") {
-		t.Errorf("selected %q after next", got)
+	if !strings.Contains(string(readme), KeysMarkdown()) {
+		t.Errorf("README.md lacks the key table; it should contain:\n%s", KeysMarkdown())
 	}
+}
 
-	h.press("home", "down")
-	h.kodi.Reset()
-	h.press("enter")
-	if !slices.Contains(h.kodi.Calls(), koditest.Call{Method: "Player.GoTo", Params: `{"playerid":0,"to":1}`}) {
-		t.Errorf("calls = %v, want Player.GoTo to 1", h.kodi.Calls())
+// TestKeyBindings checks that every bound key is a name Bubble Tea gives to
+// real terminal input and that no key is bound twice in a view.
+func TestKeyBindings(t *testing.T) {
+	seen := map[scope]map[string]bool{}
+	for _, section := range keyTable() {
+		if seen[section.scope] == nil {
+			seen[section.scope] = map[string]bool{}
+		}
+		for _, row := range section.rows {
+			for _, b := range row.keys {
+				input, ok := keyBytes[b.key]
+				if !ok {
+					input = b.key
+				}
+				if got := decodeKey(t, input).String(); got != b.key {
+					t.Errorf("bound key %q arrives as %q", b.key, got)
+				}
+				if seen[section.scope][b.key] || section.scope != everywhere && seen[everywhere][b.key] {
+					t.Errorf("key %q bound twice", b.key)
+				}
+				seen[section.scope][b.key] = true
+			}
+		}
 	}
-	if got := h.selected(); !strings.HasPrefix(got, "▶ 2  2/1") {
-		t.Errorf("selected %q", got)
-	}
-	h.press("space")
-	h.want("⏸ 2  2/1")
+}
 
-	// The library keeps its cursor.
-	h.press("tab")
-	h.want("Library ▸ Artists ▸ Brian Eno ▸ Ambient 1")
-	if got := h.selected(); !strings.HasPrefix(got, "03  1/2") {
-		t.Errorf("library selection %q", got)
+// TestKeyEncodings checks that the encodings of other terminals (kitty
+// keyboard protocol, xterm modifyOtherKeys, SS3 arrows) arrive under the
+// bound names.
+func TestKeyEncodings(t *testing.T) {
+	for input, want := range map[string]string{
+		"\x1b[113;2u":   "Q",
+		"\x1b[27;2;81~": "Q",
+		"\x1b[107;2u":   "K",
+		"\x1b[106;2u":   "J",
+		"\x1b[99;5u":    "ctrl+c",
+		"\x1bOD":        "left",
+		"\x1bOC":        "right",
+		"\x1b[3;1~":     "delete",
+		"\x1b[1;2A":     "shift+up",
+	} {
+		if got := decodeKey(t, input).String(); got != want {
+			t.Errorf("%q arrives as %q, want %q", input, got, want)
+		}
 	}
 }
 
 func TestErrorsFlash(t *testing.T) {
 	h := newHarness(t, 80, 12)
-	h.press("enter", "down", "enter")
+	h.press("enter", "down", "p")
 	h.kodi.Handle("Player.PlayPause", func(json.RawMessage) (any, error) {
 		return nil, &kodi.Error{Code: -32100, Message: "Failed to execute method."}
 	})
 	h.press("space")
 	h.want("Kodi: Player.PlayPause: Failed to execute method.")
 	h.wantNot("? help")
+	if !h.m.flashErr {
+		t.Error("a Kodi error is not flashed as an error")
+	}
 	h.advance(5 * time.Second)
 	h.want("? help")
 	h.wantNot("Failed")
@@ -440,11 +402,9 @@ func TestErrorsFlash(t *testing.T) {
 
 func TestLostConnection(t *testing.T) {
 	h := newHarness(t, 80, 12)
-	h.press("enter", "down", "enter", "+")
+	h.press("enter", "down", "p", "+")
 	h.advance(3 * time.Second)
-	h.kodi.Handle("Player.GetActivePlayers", func(json.RawMessage) (any, error) {
-		return nil, &kodi.UnavailableError{Addr: "127.0.0.1:9090", Err: errString("connection refused")}
-	})
+	h.kodi.Handle("Player.GetActivePlayers", unavailable)
 	h.advance(time.Second)
 	h.want("■ stopped", "Kodi unavailable: 127.0.0.1:9090: connection refused")
 
@@ -464,7 +424,7 @@ func TestSizes(t *testing.T) {
 		{ID: 1, Title: "Zażółć gęślą jaźń\tz tabulatorem", Track: 1, Duration: 4000, DisplayArtist: "Gość"},
 		{ID: 2, Title: "日本語の曲", Track: 2, Duration: 61},
 	}})
-	h.press("right", "enter")
+	h.press("right", "p", "r", "s", "q")
 
 	check := func(name string) {
 		for height := 0; height <= 8; height++ {
@@ -489,10 +449,14 @@ func TestSizes(t *testing.T) {
 	check("tracks")
 	h.press("tab")
 	check("queue")
-	h.press("+")
-	check("volume")
+	h.press("c")
+	check("clear question")
+	h.press("n", "m")
+	check("muted")
 	h.press("?")
 	check("help")
+	h.press("end")
+	check("help scrolled")
 }
 
 func TestTextHelpers(t *testing.T) {

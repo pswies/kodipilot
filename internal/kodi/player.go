@@ -3,6 +3,7 @@ package kodi
 import (
 	"cmp"
 	"context"
+	"errors"
 	"maps"
 	"strings"
 	"sync"
@@ -15,9 +16,19 @@ const MusicPlaylist = 0
 // VolumeStep is the volume change, in percent, of one ChangeVolume step.
 const VolumeStep = 5
 
-// Player controls playback. Its operations are serialised, so that, for
-// example, two quick volume steps or album starts never interleave. It is
-// safe for concurrent use.
+// Errors of playback actions that Kodi would refuse or ignore.
+var (
+	ErrNotPlaying  = errors.New("nothing is playing")
+	ErrPlayingItem = errors.New("the playing item can't be removed")
+)
+
+// Player controls playback and the music playlist, the queue. Every
+// JSON-RPC method that changes something is called from here. Its operations
+// are serialised, so that, for example, two quick volume steps or album
+// starts never interleave. It is safe for concurrent use.
+//
+// Methods that act on the audio player return ErrNotPlaying, without making
+// a change, when no audio plays.
 type Player struct {
 	client Client
 	mu     sync.Mutex
@@ -44,6 +55,7 @@ type Status struct {
 
 // QueueItem is an entry of the music playlist.
 type QueueItem struct {
+	ID       int // the song id
 	Title    string
 	Artist   string
 	Album    string
@@ -56,10 +68,10 @@ type Volume struct {
 	Muted bool
 }
 
-// PlayAlbum replaces whatever plays, music or video, with songs, in the given
+// Play replaces whatever plays, music or video, with songs, in the given
 // order, starting at position: it stops every active player, clears the music
 // playlist, adds the songs and opens the playlist at position.
-func (p *Player) PlayAlbum(ctx context.Context, songs []Song, position int) error {
+func (p *Player) Play(ctx context.Context, songs []Song, position int) error {
 	if len(songs) == 0 {
 		return nil
 	}
@@ -79,16 +91,63 @@ func (p *Player) PlayAlbum(ctx context.Context, songs []Song, position int) erro
 	if err := p.call(ctx, "Playlist.Clear", map[string]any{"playlistid": MusicPlaylist}); err != nil {
 		return err
 	}
-	items := make([]map[string]int, len(songs))
-	for i, song := range songs {
-		items[i] = map[string]int{"songid": song.ID}
-	}
-	if err := p.call(ctx, "Playlist.Add", map[string]any{"playlistid": MusicPlaylist, "item": items}); err != nil {
+	if err := p.add(ctx, songs); err != nil {
 		return err
 	}
-	return p.call(ctx, "Player.Open", map[string]any{
-		"item": map[string]int{"playlistid": MusicPlaylist, "position": position},
+	return p.open(ctx, position)
+}
+
+// Enqueue appends songs to the queue, in the given order, without starting
+// playback.
+func (p *Player) Enqueue(ctx context.Context, songs []Song) error {
+	if len(songs) == 0 {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.add(ctx, songs)
+}
+
+// Remove removes the queue item at position. Like Kodi, it refuses to remove
+// the playing item, with ErrPlayingItem.
+func (p *Player) Remove(ctx context.Context, position int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id, ok, err := p.audioPlayer(ctx)
+	if err != nil {
+		return err
+	}
+	if ok {
+		var props struct {
+			Position int `json:"position"`
+		}
+		err := p.client.Call(ctx, "Player.GetProperties", map[string]any{
+			"playerid": id, "properties": []string{"position"},
+		}, &props)
+		if err != nil {
+			return err
+		}
+		if props.Position == position {
+			return ErrPlayingItem
+		}
+	}
+	return p.call(ctx, "Playlist.Remove", map[string]any{"playlistid": MusicPlaylist, "position": position})
+}
+
+// Swap swaps two queue items.
+func (p *Player) Swap(ctx context.Context, position1, position2 int) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.call(ctx, "Playlist.Swap", map[string]any{
+		"playlistid": MusicPlaylist, "position1": position1, "position2": position2,
 	})
+}
+
+// Clear empties the queue.
+func (p *Player) Clear(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.call(ctx, "Playlist.Clear", map[string]any{"playlistid": MusicPlaylist})
 }
 
 // PlayPause pauses or resumes the audio player.
@@ -111,6 +170,25 @@ func (p *Player) Stop(ctx context.Context) error {
 	return p.onAudio(ctx, "Player.Stop", nil)
 }
 
+// Seek jumps forward or back by Kodi's small step (30 s by default).
+func (p *Player) Seek(ctx context.Context, forward bool) error {
+	step := "smallbackward"
+	if forward {
+		step = "smallforward"
+	}
+	return p.onAudio(ctx, "Player.Seek", map[string]any{"value": map[string]string{"step": step}})
+}
+
+// CycleRepeat switches repeat from off to all to one and back to off.
+func (p *Player) CycleRepeat(ctx context.Context) error {
+	return p.onAudio(ctx, "Player.SetRepeat", map[string]any{"repeat": "cycle"})
+}
+
+// ToggleShuffle turns shuffle on or off.
+func (p *Player) ToggleShuffle(ctx context.Context) error {
+	return p.onAudio(ctx, "Player.SetShuffle", map[string]any{"shuffle": "toggle"})
+}
+
 // GoTo plays the queue item at position: it jumps there when audio plays,
 // and otherwise opens the music playlist at that position.
 func (p *Player) GoTo(ctx context.Context, position int) error {
@@ -123,9 +201,7 @@ func (p *Player) GoTo(ctx context.Context, position int) error {
 	if ok {
 		return p.call(ctx, "Player.GoTo", map[string]any{"playerid": id, "to": position})
 	}
-	return p.call(ctx, "Player.Open", map[string]any{
-		"item": map[string]int{"playlistid": MusicPlaylist, "position": position},
-	})
+	return p.open(ctx, position)
 }
 
 // Volume returns Kodi's global volume.
@@ -161,6 +237,17 @@ func (p *Player) ChangeVolume(ctx context.Context, steps int) (Volume, error) {
 	}
 	vol.Level = target
 	return vol, nil
+}
+
+// ToggleMute mutes or unmutes Kodi and returns the new volume. It works
+// whether anything plays or not.
+func (p *Player) ToggleMute(ctx context.Context) (Volume, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.call(ctx, "Application.SetMute", map[string]any{"mute": "toggle"}); err != nil {
+		return Volume{}, err
+	}
+	return p.Volume(ctx)
 }
 
 // NowPlaying returns the audio player's status, or nil when no audio plays.
@@ -230,6 +317,7 @@ func (p *Player) NowPlaying(ctx context.Context) (*Status, error) {
 func (p *Player) Queue(ctx context.Context) ([]QueueItem, error) {
 	var result struct {
 		Items []struct {
+			ID       int      `json:"id"`
 			Title    string   `json:"title"`
 			Label    string   `json:"label"`
 			Artist   []string `json:"artist"`
@@ -247,6 +335,7 @@ func (p *Player) Queue(ctx context.Context) ([]QueueItem, error) {
 	queue := make([]QueueItem, len(result.Items))
 	for i, item := range result.Items {
 		queue[i] = QueueItem{
+			ID:       item.ID,
 			Title:    cmp.Or(item.Title, item.Label),
 			Artist:   strings.Join(item.Artist, ", "),
 			Album:    item.Album,
@@ -283,18 +372,37 @@ func (p *Player) audioPlayer(ctx context.Context) (id int, ok bool, err error) {
 	return 0, false, nil
 }
 
-// onAudio calls method on the audio player, with params added to its id; it
-// does nothing when no audio plays.
+// onAudio calls method on the audio player, with params added to its id. It
+// returns ErrNotPlaying when no audio plays.
 func (p *Player) onAudio(ctx context.Context, method string, params map[string]any) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	id, ok, err := p.audioPlayer(ctx)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		return ErrNotPlaying
 	}
 	args := map[string]any{"playerid": id}
 	maps.Copy(args, params)
 	return p.call(ctx, method, args)
+}
+
+// add appends songs to the music playlist.
+func (p *Player) add(ctx context.Context, songs []Song) error {
+	items := make([]map[string]int, len(songs))
+	for i, song := range songs {
+		items[i] = map[string]int{"songid": song.ID}
+	}
+	return p.call(ctx, "Playlist.Add", map[string]any{"playlistid": MusicPlaylist, "item": items})
+}
+
+// open starts playing the music playlist at position.
+func (p *Player) open(ctx context.Context, position int) error {
+	return p.call(ctx, "Player.Open", map[string]any{
+		"item": map[string]int{"playlistid": MusicPlaylist, "position": position},
+	})
 }
 
 func (p *Player) call(ctx context.Context, method string, params any) error {

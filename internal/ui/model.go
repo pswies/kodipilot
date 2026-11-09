@@ -1,6 +1,7 @@
 // Package ui is kodipilot's Bubble Tea model: a library browser (album
 // artists → albums → tracks) and a player view of Kodi's play queue, with a
-// status line, a help pop-up and a volume pop-up.
+// status line and help, volume and confirmation pop-ups. The key table in
+// keys.go binds every key.
 //
 // All Kodi calls run as commands, outside Update, and report back as
 // messages; timers go through a Clock so the model can be tested without a
@@ -10,6 +11,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -83,9 +85,12 @@ type Model struct {
 	dark   bool
 	colors colorprofile.Profile
 
+	keys          []keySection
 	width, height int
 	view          viewKind
 	helpOpen      bool
+	helpTop       int  // the first help line shown
+	confirmClear  bool // asking whether to clear the queue
 
 	lib     *kodi.Library // nil while waiting for Kodi
 	waitErr error         // why Kodi is not there yet
@@ -99,6 +104,7 @@ type Model struct {
 	volume       *kodi.Volume // nil until known
 	volumeUntil  time.Time    // the volume pop-up shows until then
 	flash        string
+	flashErr     bool // the flash is an error
 	flashUntil   time.Time
 	actions      int  // counts actions, so that polls that overlap one are redone
 	polling      bool // a status poll is running
@@ -110,6 +116,7 @@ type Model struct {
 func New(client kodi.Client, clock Clock) *Model {
 	m := &Model{
 		client:      client,
+		keys:        keyTable(),
 		player:      kodi.NewPlayer(client),
 		clock:       clock,
 		dark:        true,
@@ -142,7 +149,10 @@ type (
 		songs []kodi.Song
 		err   error
 	}
-	actionMsg struct{ err error }
+	actionMsg struct {
+		info string // what the action did, to flash
+		err  error
+	}
 	volumeMsg struct {
 		volume kodi.Volume
 		err    error
@@ -194,10 +204,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case songsMsg:
 		return m.opened(msg)
 	case actionMsg:
-		if msg.err != nil {
-			return tea.Batch(m.showError(msg.err), m.refresh())
+		var flash tea.Cmd
+		switch {
+		case msg.err != nil:
+			flash = m.showError(msg.err)
+		case msg.info != "":
+			flash = m.showInfo(msg.info)
 		}
-		return m.refresh()
+		return tea.Batch(flash, m.refresh())
 	case volumeMsg:
 		if msg.err != nil {
 			return m.showError(msg.err)
@@ -207,68 +221,277 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// key handles a key press.
+// key handles a key press, named as Bubble Tea names it.
 func (m *Model) key(key string) tea.Cmd {
-	if key == "ctrl+c" {
+	switch {
+	case key == "ctrl+c":
 		return tea.Quit
-	}
-	if m.helpOpen { // only the closing keys work while help is open
-		switch key {
-		case "esc", "?", "h", "q", "Q":
-			m.helpOpen = false
-		}
+	case m.helpOpen:
+		m.helpKey(key)
 		return nil
+	case m.confirmClear:
+		return m.confirmKey(key)
 	}
+	if do := handler(m.keys, m.view, key); do != nil {
+		return do(m)
+	}
+	return nil
+}
+
+// helpKey handles a key while help is open: the closing keys close it, the
+// moving keys scroll it, and other keys are ignored.
+func (m *Model) helpKey(key string) {
+	page := max(1, m.helpRows())
 	switch key {
-	case "q", "Q":
-		return tea.Quit
-	case "?", "h":
-		m.helpOpen = true
-	case "tab", "shift+tab":
-		if m.view == playerView {
-			m.view = libraryView
-			return nil
-		}
-		m.view = playerView
-		return m.refresh() // fetch the queue now
-	case "space":
-		return m.act(m.player.PlayPause)
-	case "n":
-		return m.act(m.player.Next)
-	case "p":
-		return m.act(m.player.Previous)
-	case "s":
-		return m.act(m.player.Stop)
-	case "+", "=":
-		return m.changeVolume(+1)
-	case "-":
-		return m.changeVolume(-1)
+	case "esc", "?", "h", "q", "Q":
+		m.helpOpen = false
 	case "up":
-		m.move(-1)
+		m.helpTop--
 	case "down":
-		m.move(+1)
+		m.helpTop++
 	case "pgup":
-		m.move(-m.listHeight())
+		m.helpTop -= page
 	case "pgdown":
-		m.move(+m.listHeight())
+		m.helpTop += page
 	case "home":
-		m.move(-farAway)
+		m.helpTop = 0
 	case "end":
-		m.move(+farAway)
-	case "right":
-		return m.open()
-	case "enter":
-		return m.enter()
-	case "left", "backspace":
-		if m.view == libraryView && len(m.levels) > 1 {
-			m.levels = m.levels[:len(m.levels)-1]
-		}
+		m.helpTop = farAway
+	}
+	m.helpTop = max(0, min(m.helpTop, len(m.helpLines(0))-page))
+}
+
+// confirmKey handles a key while the clear-the-queue question is open.
+func (m *Model) confirmKey(key string) tea.Cmd {
+	switch key {
+	case "y", "Y":
+		m.confirmClear = false
+		return m.actWith(func(ctx context.Context) (string, error) {
+			return "Queue cleared", m.player.Clear(ctx)
+		})
+	case "n", "N", "esc":
+		m.confirmClear = false
 	}
 	return nil
 }
 
 // farAway is a cursor move that reaches either end of any list.
 const farAway = 1 << 30
+
+// Key handlers, bound in the key table. Library and Player handlers are
+// bound only in their view.
+
+func (m *Model) up() tea.Cmd       { m.move(-1); return nil }
+func (m *Model) down() tea.Cmd     { m.move(+1); return nil }
+func (m *Model) pageUp() tea.Cmd   { m.move(-max(1, m.listHeight())); return nil }
+func (m *Model) pageDown() tea.Cmd { m.move(+max(1, m.listHeight())); return nil }
+func (m *Model) home() tea.Cmd     { m.move(-farAway); return nil }
+func (m *Model) end() tea.Cmd      { m.move(+farAway); return nil }
+
+func (m *Model) quit() tea.Cmd { return tea.Quit }
+
+func (m *Model) openHelp() tea.Cmd {
+	m.helpOpen, m.helpTop = true, 0
+	return nil
+}
+
+func (m *Model) switchView() tea.Cmd {
+	if m.view == playerView {
+		m.view = libraryView
+		return nil
+	}
+	m.view = playerView
+	return m.refresh() // fetch the queue now
+}
+
+func (m *Model) pause() tea.Cmd       { return m.act(m.player.PlayPause) }
+func (m *Model) stop() tea.Cmd        { return m.act(m.player.Stop) }
+func (m *Model) next() tea.Cmd        { return m.act(m.player.Next) }
+func (m *Model) previous() tea.Cmd    { return m.act(m.player.Previous) }
+func (m *Model) cycleRepeat() tea.Cmd { return m.act(m.player.CycleRepeat) }
+
+func (m *Model) toggleShuffle() tea.Cmd { return m.act(m.player.ToggleShuffle) }
+
+func (m *Model) seekBack() tea.Cmd {
+	return m.act(func(ctx context.Context) error { return m.player.Seek(ctx, false) })
+}
+
+func (m *Model) seekForward() tea.Cmd {
+	return m.act(func(ctx context.Context) error { return m.player.Seek(ctx, true) })
+}
+
+func (m *Model) volumeUp() tea.Cmd   { return m.changeVolume(+1) }
+func (m *Model) volumeDown() tea.Cmd { return m.changeVolume(-1) }
+
+func (m *Model) changeVolume(steps int) tea.Cmd {
+	return m.setVolume(func(ctx context.Context) (kodi.Volume, error) { return m.player.ChangeVolume(ctx, steps) })
+}
+
+func (m *Model) mute() tea.Cmd { return m.setVolume(m.player.ToggleMute) }
+
+func (m *Model) setVolume(f func(context.Context) (kodi.Volume, error)) tea.Cmd {
+	m.actions++
+	return m.command(func(ctx context.Context) tea.Msg {
+		volume, err := f(ctx)
+		return volumeMsg{volume: volume, err: err}
+	})
+}
+
+// open opens the selected artist or album; on a track, it plays the album
+// from that track, as Kodi does.
+func (m *Model) open() tea.Cmd {
+	l := m.current()
+	if l == nil || l.len() == 0 {
+		return nil
+	}
+	switch l.kind {
+	case artistsLevel:
+		artist := l.artists[l.list.index]
+		m.levels = append(m.levels, level{kind: albumsLevel, title: artist.Name, albums: m.lib.Albums(artist.ID)})
+		return nil
+	case albumsLevel:
+		album, depth, lib := l.albums[l.list.index], len(m.levels), m.lib
+		return m.command(func(ctx context.Context) tea.Msg {
+			songs, err := lib.Songs(ctx, album.ID)
+			return songsMsg{album: album, depth: depth, songs: songs, err: err}
+		})
+	default:
+		return m.play()
+	}
+}
+
+// opened shows the tracks of an album, unless the user has moved on.
+func (m *Model) opened(msg songsMsg) tea.Cmd {
+	if msg.err != nil {
+		return m.showError(msg.err)
+	}
+	l := m.current()
+	if len(m.levels) == msg.depth && l.kind == albumsLevel && l.len() > 0 && l.albums[l.list.index].ID == msg.album.ID {
+		m.levels = append(m.levels, level{kind: tracksLevel, title: msg.album.Title, songs: msg.songs, album: msg.album})
+	}
+	return nil
+}
+
+func (m *Model) back() tea.Cmd {
+	if len(m.levels) > 1 {
+		m.levels = m.levels[:len(m.levels)-1]
+	}
+	return nil
+}
+
+func (m *Model) backOrQuit() tea.Cmd {
+	if len(m.levels) > 1 {
+		return m.back()
+	}
+	return tea.Quit
+}
+
+// selection returns the songs of the selected library row (an artist's
+// albums, an album, or a track's album), the position of the selected track
+// in them, and the row's name.
+func (m *Model) selection() (songs func(context.Context) ([]kodi.Song, error), position int, name string) {
+	l := m.current()
+	if l == nil || l.len() == 0 {
+		return nil, 0, ""
+	}
+	lib, i := m.lib, l.list.index
+	switch l.kind {
+	case artistsLevel:
+		artist := l.artists[i]
+		return func(ctx context.Context) ([]kodi.Song, error) { return lib.ArtistSongs(ctx, artist.ID) }, 0, artist.Name
+	case albumsLevel:
+		album := l.albums[i]
+		return func(ctx context.Context) ([]kodi.Song, error) { return lib.Songs(ctx, album.ID) }, 0, album.Title
+	default:
+		all := l.songs
+		return func(context.Context) ([]kodi.Song, error) { return all, nil }, i, all[i].Title
+	}
+}
+
+// play replaces the queue with the selection and plays it.
+func (m *Model) play() tea.Cmd {
+	songs, position, _ := m.selection()
+	if songs == nil {
+		return nil
+	}
+	return m.act(func(ctx context.Context) error {
+		list, err := songs(ctx)
+		if err != nil {
+			return err
+		}
+		return m.player.Play(ctx, list, position)
+	})
+}
+
+// enqueue appends the selection to the queue: an artist's or album's songs,
+// or one track.
+func (m *Model) enqueue() tea.Cmd {
+	songs, position, name := m.selection()
+	if songs == nil {
+		return nil
+	}
+	track := m.current().kind == tracksLevel
+	return m.actWith(func(ctx context.Context) (string, error) {
+		list, err := songs(ctx)
+		if err != nil {
+			return "", err
+		}
+		if track {
+			list = list[position : position+1]
+		}
+		if err := m.player.Enqueue(ctx, list); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Queued %s: %s", plural(len(list), "track"), name), nil
+	})
+}
+
+// playSelected plays the selected queue item.
+func (m *Model) playSelected() tea.Cmd {
+	if len(m.queue) == 0 {
+		return nil
+	}
+	position := m.queueList.index
+	return m.act(func(ctx context.Context) error { return m.player.GoTo(ctx, position) })
+}
+
+func (m *Model) remove() tea.Cmd {
+	if len(m.queue) == 0 {
+		return nil
+	}
+	position := m.queueList.index
+	return m.act(func(ctx context.Context) error { return m.player.Remove(ctx, position) })
+}
+
+func (m *Model) moveItemUp() tea.Cmd   { return m.moveItem(-1) }
+func (m *Model) moveItemDown() tea.Cmd { return m.moveItem(+1) }
+
+// moveItem swaps the selected queue item with its neighbour. The cursor,
+// and the list until the next refresh, follow at once.
+func (m *Model) moveItem(delta int) tea.Cmd {
+	from := m.queueList.index
+	to := from + delta
+	if from >= len(m.queue) || to < 0 || to >= len(m.queue) {
+		return nil
+	}
+	m.queue[from], m.queue[to] = m.queue[to], m.queue[from]
+	m.queueList.index = to
+	if s := m.status; s != nil {
+		switch s.Position {
+		case from:
+			s.Position = to
+		case to:
+			s.Position = from
+		}
+		m.lastPlaying = s.Position
+	}
+	return m.act(func(ctx context.Context) error { return m.player.Swap(ctx, from, to) })
+}
+
+func (m *Model) askClear() tea.Cmd {
+	m.confirmClear = len(m.queue) > 0
+	return nil
+}
 
 // current returns the library level shown, or nil while waiting for Kodi.
 func (m *Model) current() *level {
@@ -297,69 +520,6 @@ func (m *Model) scroll() {
 	}
 }
 
-// open opens the selected artist or album.
-func (m *Model) open() tea.Cmd {
-	l := m.current()
-	if m.view != libraryView || l == nil || l.len() == 0 {
-		return nil
-	}
-	switch l.kind {
-	case artistsLevel:
-		artist := l.artists[l.list.index]
-		m.levels = append(m.levels, level{kind: albumsLevel, title: artist.Name, albums: m.lib.Albums(artist.ID)})
-	case albumsLevel:
-		album, depth, lib := l.albums[l.list.index], len(m.levels), m.lib
-		return m.command(func(ctx context.Context) tea.Msg {
-			songs, err := lib.Songs(ctx, album.ID)
-			return songsMsg{album: album, depth: depth, songs: songs, err: err}
-		})
-	}
-	return nil
-}
-
-// opened shows the tracks of an album, unless the user has moved on.
-func (m *Model) opened(msg songsMsg) tea.Cmd {
-	if msg.err != nil {
-		return m.showError(msg.err)
-	}
-	l := m.current()
-	if len(m.levels) == msg.depth && l.kind == albumsLevel && l.len() > 0 && l.albums[l.list.index].ID == msg.album.ID {
-		m.levels = append(m.levels, level{kind: tracksLevel, title: msg.album.Title, songs: msg.songs, album: msg.album})
-	}
-	return nil
-}
-
-// enter opens an artist, plays an album or track, or jumps to a queue item.
-func (m *Model) enter() tea.Cmd {
-	if m.view == playerView {
-		if len(m.queue) == 0 {
-			return nil
-		}
-		position := m.queueList.index
-		return m.act(func(ctx context.Context) error { return m.player.GoTo(ctx, position) })
-	}
-	l := m.current()
-	if l == nil || l.len() == 0 {
-		return nil
-	}
-	switch l.kind {
-	case artistsLevel:
-		return m.open()
-	case albumsLevel:
-		album, lib := l.albums[l.list.index], m.lib
-		return m.act(func(ctx context.Context) error {
-			songs, err := lib.Songs(ctx, album.ID)
-			if err != nil {
-				return err
-			}
-			return m.player.PlayAlbum(ctx, songs, 0)
-		})
-	default:
-		songs, position := l.songs, l.list.index
-		return m.act(func(ctx context.Context) error { return m.player.PlayAlbum(ctx, songs, position) })
-	}
-}
-
 // command runs f with a timeout as a command.
 func (m *Model) command(f func(context.Context) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
@@ -371,15 +531,16 @@ func (m *Model) command(f func(context.Context) tea.Msg) tea.Cmd {
 
 // act runs a playback action; the status is refreshed afterwards.
 func (m *Model) act(f func(context.Context) error) tea.Cmd {
-	m.actions++
-	return m.command(func(ctx context.Context) tea.Msg { return actionMsg{err: f(ctx)} })
+	return m.actWith(func(ctx context.Context) (string, error) { return "", f(ctx) })
 }
 
-func (m *Model) changeVolume(steps int) tea.Cmd {
+// actWith runs an action that reports what it did; the report is flashed
+// and the status refreshed afterwards.
+func (m *Model) actWith(f func(context.Context) (string, error)) tea.Cmd {
 	m.actions++
 	return m.command(func(ctx context.Context) tea.Msg {
-		volume, err := m.player.ChangeVolume(ctx, steps)
-		return volumeMsg{volume: volume, err: err}
+		info, err := f(ctx)
+		return actionMsg{info: info, err: err}
 	})
 }
 
@@ -446,22 +607,43 @@ func (m *Model) polled(msg pollMsg) tea.Cmd {
 	return tea.Batch(cmd, m.clock.After(pollInterval, tickMsg{m.tickSequence}))
 }
 
-// setQueue shows a new queue. The cursor starts on the playing item and
-// follows it while it stays there.
+// setQueue shows a new queue. The cursor starts on the playing item,
+// follows it while it stays there, and otherwise keeps its item when it can.
 func (m *Model) setQueue(queue []kodi.QueueItem) {
-	m.queue = queue
-	playing := m.playingPosition()
+	playing, i := m.playingPosition(), m.queueList.index
 	switch {
-	case playing < 0:
-	case !m.queueShown && len(queue) > 0:
-		m.queueList.index = playing
-		m.queueShown = true
-	case m.queueList.index == m.lastPlaying:
-		m.queueList.index = playing
+	case !m.queueShown:
+		if playing >= 0 && len(queue) > 0 {
+			i, m.queueShown = playing, true
+		}
+	case playing >= 0 && i == m.lastPlaying:
+		i = playing
+	default:
+		i = sameItem(m.queue, queue, i)
 	}
-	m.lastPlaying = playing
+	m.queue, m.lastPlaying, m.queueList.index = queue, playing, i
 	m.queueList.move(0, len(queue))
 }
+
+// sameItem returns where the item at i in old is in queue: at i, or else at
+// the nearest position with the same song. When the item is gone, i stays.
+func sameItem(old, queue []kodi.QueueItem, i int) int {
+	if i >= len(old) || i < len(queue) && queue[i].ID == old[i].ID {
+		return i
+	}
+	best := -1
+	for j, item := range queue {
+		if item.ID == old[i].ID && (best < 0 || abs(j-i) < abs(best-i)) {
+			best = j
+		}
+	}
+	if best < 0 {
+		return i
+	}
+	return best
+}
+
+func abs(n int) int { return max(n, -n) }
 
 // playingPosition returns the queue position that plays, or -1.
 func (m *Model) playingPosition() int {
@@ -477,8 +659,20 @@ func (m *Model) showVolume(volume kodi.Volume) tea.Cmd {
 	return m.clock.After(popupDuration, redrawMsg{})
 }
 
+// showError flashes an error. Refusals such as "nothing is playing" are
+// flashed as information.
 func (m *Model) showError(err error) tea.Cmd {
-	m.flash = errorText(err)
+	if errors.Is(err, kodi.ErrNotPlaying) || errors.Is(err, kodi.ErrPlayingItem) {
+		return m.showInfo(err.Error())
+	}
+	cmd := m.showInfo(errorText(err))
+	m.flashErr = true
+	return cmd
+}
+
+// showInfo flashes a message in the footer.
+func (m *Model) showInfo(text string) tea.Cmd {
+	m.flash, m.flashErr = text, false
 	m.flashUntil = m.clock.Now().Add(flashDuration)
 	return m.clock.After(flashDuration, redrawMsg{})
 }
@@ -489,4 +683,12 @@ func errorText(err error) string {
 		return "Kodi unavailable: " + err.Error()
 	}
 	return "Kodi: " + err.Error()
+}
+
+// plural returns "1 track", "2 tracks" and so on.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

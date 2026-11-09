@@ -1,6 +1,7 @@
 package kodi_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func startPlayer(t *testing.T, audio, video bool) (*kodi.Player, *koditest.Music
 	}
 	player := kodi.NewPlayer(music)
 	if audio {
-		if err := player.PlayAlbum(ctx(t), songs, 1); err != nil {
+		if err := player.Play(ctx(t), songs, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -38,9 +39,9 @@ func callStrings(calls []koditest.Call) []string {
 	return out
 }
 
-func TestPlayAlbumReplacesPlayback(t *testing.T) {
+func TestPlayReplacesPlayback(t *testing.T) {
 	player, music, songs := startPlayer(t, true, true)
-	if err := player.PlayAlbum(ctx(t), songs, 2); err != nil {
+	if err := player.Play(ctx(t), songs, 2); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -56,9 +57,9 @@ func TestPlayAlbumReplacesPlayback(t *testing.T) {
 	}
 }
 
-func TestPlayAlbumNothingPlaying(t *testing.T) {
+func TestPlayNothingPlaying(t *testing.T) {
 	player, music, songs := startPlayer(t, false, false)
-	if err := player.PlayAlbum(ctx(t), songs, 0); err != nil {
+	if err := player.Play(ctx(t), songs, 0); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Player.GetActivePlayers", "Playlist.Clear", "Playlist.Add", "Player.Open"}
@@ -103,10 +104,19 @@ func TestControls(t *testing.T) {
 
 func TestControlsWithoutAudioPlayer(t *testing.T) {
 	player, music, _ := startPlayer(t, false, true)
-	player.PlayPause(ctx(t))
-	player.Next(ctx(t))
-	player.Previous(ctx(t))
-	player.Stop(ctx(t))
+	for name, f := range map[string]func() error{
+		"PlayPause":     func() error { return player.PlayPause(ctx(t)) },
+		"Next":          func() error { return player.Next(ctx(t)) },
+		"Previous":      func() error { return player.Previous(ctx(t)) },
+		"Stop":          func() error { return player.Stop(ctx(t)) },
+		"Seek":          func() error { return player.Seek(ctx(t), true) },
+		"CycleRepeat":   func() error { return player.CycleRepeat(ctx(t)) },
+		"ToggleShuffle": func() error { return player.ToggleShuffle(ctx(t)) },
+	} {
+		if err := f(); !errors.Is(err, kodi.ErrNotPlaying) {
+			t.Errorf("%s: err = %v, want ErrNotPlaying", name, err)
+		}
+	}
 	for _, m := range music.Methods() {
 		if m != "Player.GetActivePlayers" {
 			t.Errorf("unexpected call %s", m)
@@ -197,7 +207,166 @@ func TestNowPlayingAndQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(queue) != 4 || queue[1].Title != "2/1" || queue[1].Duration != 535*time.Second {
+	if len(queue) != 4 || queue[1].ID != 102 || queue[1].Title != "2/1" || queue[1].Duration != 535*time.Second {
 		t.Errorf("queue = %+v", queue)
 	}
+}
+
+// wantCalls checks the calls made since the last Reset, except
+// Player.GetActivePlayers.
+func wantCalls(t *testing.T, music *koditest.Music, want ...string) {
+	t.Helper()
+	var got []string
+	for _, c := range callStrings(music.Calls()) {
+		if c != "Player.GetActivePlayers" {
+			got = append(got, c)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestPlayArtist(t *testing.T) {
+	player, music, _ := startPlayer(t, false, false)
+	lib, err := kodi.LoadLibrary(ctx(t), music)
+	if err != nil {
+		t.Fatal(err)
+	}
+	songs, err := lib.ArtistSongs(ctx(t), 2) // David Byrne: one album, two discs
+	if err != nil {
+		t.Fatal(err)
+	}
+	music.Reset()
+	if err := player.Play(ctx(t), songs, 0); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music,
+		`Playlist.Clear {"playlistid":0}`,
+		`Playlist.Add {"item":[{"songid":199},{"songid":200},{"songid":201},{"songid":202}],"playlistid":0}`,
+		`Player.Open {"item":{"playlistid":0,"position":0}}`,
+	)
+}
+
+func TestArtistSongsInDisplayOrder(t *testing.T) {
+	lib, _ := loadLibrary(t)
+	songs, err := lib.ArtistSongs(ctx(t), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Albums 14, 11, 10, 12, 13; only 11 and 12 have songs in the fake.
+	want := []int{101, 102, 103, 104, 199, 200, 201, 202}
+	if got := songIDs(songs); !slices.Equal(got, want) {
+		t.Errorf("songs = %v, want %v", got, want)
+	}
+}
+
+func TestEnqueue(t *testing.T) {
+	player, music, songs := startPlayer(t, true, false)
+	if err := player.Enqueue(ctx(t), songs[2:3]); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music, `Playlist.Add {"item":[{"songid":103}],"playlistid":0}`)
+	if q := music.Queue(); !slices.Equal(q, []int{101, 102, 103, 104, 103}) {
+		t.Errorf("queue = %v", q)
+	}
+	if _, _, pos := music.Playing(); pos != 1 {
+		t.Errorf("enqueueing moved playback to %d", pos)
+	}
+}
+
+func TestEnqueueStartsNothing(t *testing.T) {
+	player, music, songs := startPlayer(t, false, false)
+	if err := player.Enqueue(ctx(t), songs); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music,
+		`Playlist.Add {"item":[{"songid":101},{"songid":102},{"songid":103},{"songid":104}],"playlistid":0}`)
+	if playing, _, _ := music.Playing(); playing {
+		t.Error("Enqueue started playback")
+	}
+}
+
+func TestSeekRepeatShuffle(t *testing.T) {
+	player, music, _ := startPlayer(t, true, false)
+	for _, f := range []func() error{
+		func() error { return player.Seek(ctx(t), true) },
+		func() error { return player.Seek(ctx(t), false) },
+		func() error { return player.CycleRepeat(ctx(t)) },
+		func() error { return player.ToggleShuffle(ctx(t)) },
+	} {
+		if err := f(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantCalls(t, music,
+		`Player.Seek {"playerid":0,"value":{"step":"smallforward"}}`,
+		`Player.Seek {"playerid":0,"value":{"step":"smallbackward"}}`,
+		`Player.SetRepeat {"playerid":0,"repeat":"cycle"}`,
+		`Player.SetShuffle {"playerid":0,"shuffle":"toggle"}`,
+	)
+	if repeat, shuffled := music.Modes(); repeat != "all" || !shuffled {
+		t.Errorf("modes = %s, %v", repeat, shuffled)
+	}
+}
+
+func TestToggleMute(t *testing.T) {
+	player, music, _ := startPlayer(t, false, false)
+	v, err := player.ToggleMute(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != (kodi.Volume{Level: 50, Muted: true}) {
+		t.Errorf("volume = %+v", v)
+	}
+	wantCalls(t, music,
+		`Application.SetMute {"mute":"toggle"}`,
+		`Application.GetProperties {"properties":["volume","muted"]}`,
+	)
+	if v, _ := player.ToggleMute(ctx(t)); v.Muted {
+		t.Error("second toggle left it muted")
+	}
+}
+
+func TestRemove(t *testing.T) {
+	player, music, _ := startPlayer(t, true, false) // playing position 1
+	if err := player.Remove(ctx(t), 3); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music,
+		`Player.GetProperties {"playerid":0,"properties":["position"]}`,
+		`Playlist.Remove {"playlistid":0,"position":3}`,
+	)
+	if q := music.Queue(); !slices.Equal(q, []int{101, 102, 103}) {
+		t.Errorf("queue = %v", q)
+	}
+
+	music.Reset()
+	if err := player.Remove(ctx(t), 1); !errors.Is(err, kodi.ErrPlayingItem) {
+		t.Errorf("removing the playing item: err = %v", err)
+	}
+	if slices.Contains(music.Methods(), "Playlist.Remove") {
+		t.Error("Playlist.Remove called for the playing item")
+	}
+
+	player.Stop(ctx(t))
+	music.Reset()
+	if err := player.Remove(ctx(t), 1); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music, `Playlist.Remove {"playlistid":0,"position":1}`)
+}
+
+func TestSwapAndClear(t *testing.T) {
+	player, music, _ := startPlayer(t, true, false)
+	if err := player.Swap(ctx(t), 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := player.Clear(ctx(t)); err != nil {
+		t.Fatal(err)
+	}
+	wantCalls(t, music,
+		`Playlist.Swap {"playlistid":0,"position1":1,"position2":2}`,
+		`Playlist.Clear {"playlistid":0}`,
+	)
 }
