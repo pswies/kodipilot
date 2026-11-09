@@ -1,0 +1,57 @@
+# GoReleaser configuration: https://goreleaser.com
+# Local check: goreleaser check && goreleaser release --snapshot --clean
+version: 2
+
+project_name: kodipilot
+
+builds:
+  - main: ./cmd/kodipilot
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^ci:"]
+
+nfpms:
+  - package_name: kodipilot
+    vendor: Piotr Święs
+    maintainer: Piotr Święs <10480513+pswies@users.noreply.github.com>
+    homepage: https://github.com/pswies/kodipilot
+    description: Keyboard terminal UI to browse Kodi's music library and play albums in Kodi.
+    license: MIT
+    section: sound
+    formats: [deb]
+    bindir: /usr/bin
+
+# A Homebrew cask for the future tap pswies/homebrew-tap (GoReleaser's
+# replacement for the deprecated "brews" formulae).
+homebrew_casks:
+  - name: kodipilot
+    repository:
+      owner: pswies
+      name: homebrew-tap
+    homepage: https://github.com/pswies/kodipilot
+    description: Keyboard terminal UI to browse Kodi's music library and play albums in Kodi
+    license: MIT
+    binaries: [kodipilot]
+    commit_author:
+      name: Piotr Święs
+      email: 10480513+pswies@users.noreply.github.com
+    skip_upload: true # until the tap is published
