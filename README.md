@@ -1,40 +1,48 @@
 # kodipilot
 
 A keyboard terminal UI for [Kodi](https://kodi.tv)'s music library. Browse album
-artists → albums → tracks and play them in Kodi: on the Kodi machine itself, over
-SSH, or from another computer over HTTP. Starting a track queues the rest of its
-album, as Kodi's own UI does.
+artists → albums → tracks, play them or add them to Kodi's queue, and manage the
+queue: on the Kodi machine itself, over SSH, or from another computer over HTTP.
+The keys follow Kodi's own keyboard map wherever Kodi has an equivalent (Space,
+x, `.` `,`, `+` `-`, F8, Tab), and starting a track queues the rest of its album,
+as Kodi does.
 
 ```
- Library ▸ Artists ▸ Brian Eno ▸ Ambient 1                                2/4
-  01  1/1                                                               17:01
-▌ 02  2/1                                                               08:55
-  03  1/2      ╭──────────────────────────────────────────────╮         11:52
-  04  2/2      │ Volume ▕█████████████████░░░░░░░░░░░░░▏  55% │         06:00
-               ╰──────────────────────────────────────────────╯
+ Player ▸ Queue                                  2/4 · repeat all · shuffle off
+    1  1/1  · Brian Eno                                                   17:01
+  ▶ 2  2/1  · Brian Eno                                                   08:55
+    3  1/2  · Br╭──────────────────────────────────────────────╮          11:52
+▌   4  2/2  · Br│ Volume ▕█████████████████░░░░░░░░░░░░░▏  55% │          06:00
+                ╰──────────────────────────────────────────────╯
 
 
- ▶ 03:12/08:55  Brian Eno – 2/1  [2/4]
- ? help  Tab view  → open  ← back  Enter play  Space pause  +/- volume  q quit
+ ▶ 03:12/08:55  Brian Eno – 2/1  [2/4]                                    ⟳ all
+ ? help  Tab view  Enter open  p play  q queue  Space pause  +/- volume  Q quit
 ```
 
-- **Library** and **Player** views, switched with Tab. The player view shows
-  Kodi's play queue in play order, with the playing item, repeat and shuffle.
-- Playback keys work in both views: pause, next, previous, stop and volume.
+- **Library** and **Player** views, switched with Tab. The library plays or
+  queues a whole artist, an album or a track; the player view shows Kodi's queue
+  in play order and lets you jump, remove, reorder and clear.
+- Pause, stop, next and previous, seek, volume, mute, repeat and shuffle work in
+  both views.
 - One static binary and no saved state: everything comes from Kodi.
 - Quitting leaves the music playing.
 
 ## Install
 
+The current release is **v0.0.1**.
+
 ```sh
-go install github.com/pswies/kodipilot/cmd/kodipilot@latest
+go install github.com/pswies/kodipilot/cmd/kodipilot@v0.0.1
 ```
 
-Each [release](https://github.com/pswies/kodipilot/releases) has binaries for
-Linux and macOS (amd64 and arm64) and `.deb` packages:
+The [release](https://github.com/pswies/kodipilot/releases/tag/v0.0.1) has
+binaries for Linux and macOS (amd64 and arm64), `.deb` packages and checksums.
+On a Debian or Ubuntu Kodi box, for example a Raspberry Pi:
 
 ```sh
-sudo apt install ./kodipilot_*_linux_arm64.deb
+curl -LO https://github.com/pswies/kodipilot/releases/download/v0.0.1/kodipilot_0.0.1_linux_arm64.deb
+sudo apt install ./kodipilot_0.0.1_linux_arm64.deb
 ```
 
 Homebrew: coming soon.
@@ -90,26 +98,47 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 
 ## Keys
 
-| Key             | Action                              |
-|-----------------|-------------------------------------|
-| Up / Down       | move                                |
-| PgUp / PgDn     | move by a page                      |
-| Home / End      | first / last row                    |
-| Right           | open: artist → albums → tracks      |
-| Left, Backspace | back                                |
-| Enter           | on an artist: open                  |
-|                 | on an album: play it from track 1   |
-|                 | on a track: play the album from it  |
-|                 | in the queue: play that item        |
-| Tab             | switch between Library and Player   |
-| Space           | pause / resume                      |
-| n / p           | next / previous track               |
-| s               | stop                                |
-| + / -           | volume up / down by 5%              |
-| ? / h           | help (Esc or q closes it)           |
-| q               | quit (the music keeps playing)      |
+`?` shows these keys in the app, and `kodipilot --help` prints them.
 
-Playing an album or track replaces whatever plays, music or video.
+**Everywhere**
+
+| Key | Action | Kodi |
+|---|---|---|
+| ↑ ↓ PgUp PgDn Home End | move | ↑ ↓ PgUp PgDn Home End |
+| Tab | switch Library ⇄ Player | Tab |
+| Space | pause / resume | Space |
+| x | stop | X |
+| . / , | next / previous track | . / , |
+| shift+← / shift+→ | seek back / forward | ← / → while playing |
+| + = / - | volume up / down by 5% | + = / - |
+| F8, m | mute on / off | F8 |
+| r | repeat: off → all → one → off | — |
+| s | shuffle on / off | — |
+| ? / h | this help | — |
+| Q, ctrl+c | quit (the music keeps playing) | — |
+
+**Library**
+
+| Key | Action | Kodi |
+|---|---|---|
+| Enter, → | open; on a track: play its album from there | Enter |
+| ←, Backspace, Esc | back (Esc at the top quits) | Backspace, Esc |
+| p | play: artist, album, or album from the track | P |
+| q | add to the queue | Q |
+
+**Player**
+
+| Key | Action | Kodi |
+|---|---|---|
+| Enter, p | play the selected item | Enter, P |
+| ← / → | seek back / forward | ← / → while playing |
+| Delete, d | remove the selected item | Delete |
+| shift+↑ / shift+↓, K / J | move the selected item up / down | — |
+| c | clear the queue (asks first) | — |
+
+Playing replaces whatever plays, music or video; queueing appends to Kodi's
+queue without starting playback. Repeat, shuffle and seek need something
+playing. Kodi refuses to remove the playing item, and so does kodipilot.
 
 ## Build and test
 

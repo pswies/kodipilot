@@ -3,6 +3,7 @@ package ui
 import (
 	"cmp"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -189,7 +190,7 @@ func (m *Model) statusLine(w int) string {
 	t := m.theme
 	s := m.status
 	if s == nil {
-		return line(w, t.plain, []span{{" ■ stopped", t.dim}}, nil)
+		return line(w, t.plain, []span{{" ■ stopped", t.dim}}, m.indicators())
 	}
 	icon := "▶"
 	if s.Paused {
@@ -203,22 +204,52 @@ func (m *Model) statusLine(w int) string {
 	if s.Position >= 0 && s.Count > 0 {
 		left = append(left, span{fmt.Sprintf("  [%d/%d]", s.Position+1, s.Count), t.dim})
 	}
-	return line(w, t.plain, left, nil)
+	return line(w, t.plain, left, m.indicators())
+}
+
+// indicators are the status line's compact marks for repeat, shuffle and
+// mute, when they apply.
+func (m *Model) indicators() []span {
+	var marks []string
+	if s := m.status; s != nil {
+		if s.Repeat == "all" || s.Repeat == "one" {
+			marks = append(marks, "⟳ "+s.Repeat)
+		}
+		if s.Shuffled {
+			marks = append(marks, "⤮")
+		}
+	}
+	if m.volume != nil && m.volume.Muted {
+		marks = append(marks, "muted")
+	}
+	if len(marks) == 0 {
+		return nil
+	}
+	return []span{{strings.Join(marks, "  ") + " ", m.theme.accent}}
 }
 
 func (m *Model) footer(w int) string {
 	t := m.theme
 	if m.flash != "" && m.clock.Now().Before(m.flashUntil) {
-		return line(w, t.plain, []span{{" " + m.flash, t.err}}, nil)
+		style := t.accent
+		if m.flashErr {
+			style = t.err
+		}
+		return line(w, t.plain, []span{{" " + m.flash, style}}, nil)
 	}
 	return line(w, t.plain, []span{{" " + footerHint, t.dim}}, nil)
 }
 
-// popup returns the help or the volume pop-up, or "" for none.
+// popup returns the help, the clear-the-queue question or the volume
+// pop-up, in that order of precedence, or "" for none.
 func (m *Model) popup(w, h int) string {
 	switch {
-	case m.helpOpen: // help covers the volume pop-up
+	case m.helpOpen:
 		return m.helpBox(w, h)
+	case m.confirmClear:
+		t := m.theme
+		question := []span{{"Clear the queue?", t.strong}, {"  y / n", t.dim}}
+		return m.framed([]string{line(min(24, max(1, w-4)), t.plain, question, nil)}, w, h)
 	case m.volume != nil && m.clock.Now().Before(m.volumeUntil):
 		return m.volumeBox(w, h)
 	}
@@ -240,13 +271,42 @@ func (m *Model) framed(lines []string, w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
+// helpLines returns the help, keys and about, as lines inner columns wide.
+func (m *Model) helpLines(inner int) []string {
+	t := m.theme
+	column := keyColumn(m.keys)
+	var lines []string
+	for _, section := range m.keys {
+		lines = append(lines, line(inner, t.plain, []span{{section.title, t.strong}}, nil))
+		for _, row := range section.rows {
+			lines = append(lines, line(inner, t.plain, []span{{pad(row.label, column) + "   ", t.accent}, {row.action, t.plain}}, nil))
+		}
+		lines = append(lines, "")
+	}
+	for _, about := range aboutLines() {
+		lines = append(lines, line(inner, t.plain, []span{{about, t.dim}}, nil))
+	}
+	return lines
+}
+
+// helpRows returns how many help lines the pop-up shows at once, leaving a
+// line for the scroll hint when the help does not fit.
+func (m *Model) helpRows() int {
+	rows := m.height - 2 // the frame
+	if len(m.helpLines(0)) > rows {
+		rows-- // the scroll hint
+	}
+	return max(0, rows)
+}
+
 func (m *Model) helpBox(w, h int) string {
 	t := m.theme
-	table := keyTable()
-	column := keyColumn(table)
-	widest := column + 3
-	for _, k := range table {
-		widest = max(widest, column+3+width(k.action))
+	column := keyColumn(m.keys)
+	widest := 0
+	for _, section := range m.keys {
+		for _, row := range section.rows {
+			widest = max(widest, column+3+width(row.action))
+		}
 	}
 	for _, about := range aboutLines() {
 		widest = max(widest, width(about))
@@ -255,15 +315,14 @@ func (m *Model) helpBox(w, h int) string {
 	if h < 3 || w < 5 {
 		inner = w
 	}
-	lines := []string{line(inner, t.plain, []span{{"Keys", t.strong}}, nil)}
-	for _, k := range table {
-		lines = append(lines, line(inner, t.plain, []span{{pad(k.keys, column) + "   ", t.accent}, {k.action, t.plain}}, nil))
+	lines, rows := m.helpLines(inner), m.helpRows()
+	if len(lines) <= rows {
+		return m.framed(lines, w, h)
 	}
-	lines = append(lines, "")
-	for _, about := range aboutLines() {
-		lines = append(lines, line(inner, t.plain, []span{{about, t.dim}}, nil))
-	}
-	return m.framed(lines, w, h)
+	top := min(m.helpTop, len(lines)-rows)
+	shown := slices.Clone(lines[top : top+rows])
+	hint := fmt.Sprintf("↑↓ scroll  %d–%d of %d  Esc close", top+1, top+rows, len(lines))
+	return m.framed(append(shown, line(inner, t.plain, []span{{hint, t.dim}}, nil)), w, h)
 }
 
 func (m *Model) volumeBox(w, h int) string {
