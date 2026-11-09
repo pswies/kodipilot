@@ -32,19 +32,19 @@ as Kodi does.
 
 ## Install
 
-The current release is **v0.0.2**.
+The current release is **v0.0.4**.
 
 ```sh
-go install github.com/pswies/kodipilot/cmd/kodipilot@v0.0.2
+go install github.com/pswies/kodipilot/cmd/kodipilot@v0.0.4
 ```
 
-The [release](https://github.com/pswies/kodipilot/releases/tag/v0.0.2) has
+The [release](https://github.com/pswies/kodipilot/releases/tag/v0.0.4) has
 binaries for Linux and macOS (amd64 and arm64), `.deb` packages and checksums.
 On a Debian or Ubuntu Kodi box, for example a Raspberry Pi:
 
 ```sh
-curl -LO https://github.com/pswies/kodipilot/releases/download/v0.0.2/kodipilot_0.0.2_linux_arm64.deb
-sudo apt install ./kodipilot_0.0.2_linux_arm64.deb
+curl -LO https://github.com/pswies/kodipilot/releases/download/v0.0.4/kodipilot_0.0.4_linux_arm64.deb
+sudo apt install ./kodipilot_0.0.4_linux_arm64.deb
 ```
 
 Homebrew: coming soon.
@@ -109,19 +109,26 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 
 | Key | Action | Kodi |
 |---|---|---|
-| ↑ ↓ PgUp PgDn Home End | move | ↑ ↓ PgUp PgDn Home End |
+| ↑ ↓ PgUp PgDn | move | same |
+| Home / End | first / last row | same |
 | Tab | switch Library ⇄ Queue | Tab |
 | Space | pause / resume | Space |
 | x | stop | X |
 | . / , | next / previous track | . / , |
-| shift+← / shift+→ | seek back / forward | ← / → while playing |
+| shift+← / shift+→ | seek back / forward | ← / → |
 | + = / - | volume up / down by 5% | + = / - |
 | F8, m | mute on / off | F8 |
 | r | repeat: off → all → one → off | — |
 | s | shuffle on / off | — |
-| i | details: show / hide (full screen when narrow) | I |
 | ? / h | this help | — |
 | Q, ctrl+c | quit (the music keeps playing) | — |
+
+**Details**
+
+| Key | Action | Kodi |
+|---|---|---|
+| i | show / hide (full screen when narrow) | I |
+| [ / ] | scroll the details | — |
 
 **Library**
 
@@ -129,7 +136,7 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 |---|---|---|
 | Enter, → | open; on a track: play its album from there | Enter |
 | ←, Backspace, Esc | back (Esc at the top quits) | Backspace, Esc |
-| p | play: artist, album, or album from the track | P |
+| p | play now: artist, album, or from a track | P |
 | q | add to the queue | Q |
 
 **Queue**
@@ -137,9 +144,9 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | Key | Action | Kodi |
 |---|---|---|
 | Enter, p | play the selected item | Enter, P |
-| ← / → | seek back / forward | ← / → while playing |
+| ← / → | seek back / forward | ← / → |
 | Delete, d | remove the selected item | Delete |
-| shift+↑ / shift+↓, K / J | move the selected item up / down | — |
+| shift+↑ / ↓, K / J | move the selected item up / down | — |
 | c | clear the queue (asks first) | — |
 
 Playing replaces whatever plays, music or video; queueing appends to Kodi's
@@ -151,7 +158,9 @@ playing. Kodi refuses to remove the playing item, and so does kodipilot.
 On terminals at least 90 columns wide and 14 rows tall, a pane left of the list
 shows the highlighted item. On 120 columns and more the list takes a quarter of
 the width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
-it opens the details full-screen instead (Esc, `←` or `i` close them).
+it opens the details full-screen instead (Esc, `←` or `i` close them). `[` and
+`]` scroll long biographies, reviews and lyrics; the image sits at the top left,
+with the text beside it when there is room, flowing on underneath.
 
 - **Artist:** image, genre, style, born / formed / years active, album count and
   biography.
