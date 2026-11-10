@@ -46,23 +46,28 @@ func (m *Model) render() string {
 	return canvas.Render()
 }
 
-// middle renders the rows between the header and the status line: the
-// details pane on the left and the list on the right, or only one of them.
+// middle renders the body, the rows between the header and the status
+// line, as the layout shares it between the list and the details.
 func (m *Model) middle(w, height int) []string {
-	if m.fullDetails() {
+	l := m.layout()
+	switch l.tier {
+	case detailsOnly:
 		return m.detailsLines(w, height)
-	}
-	list, pane := m.layout()
-	rows := m.body(list, height)
-	if pane == 0 {
+	case sideBySide:
+		rows := m.body(l.listWidth, height)
+		details := m.detailsLines(l.paneWidth, height)
+		divider := m.theme.dim.Render("│")
+		for i := range rows {
+			rows[i] = fill(details[i], l.paneWidth) + divider + fill(rows[i], l.listWidth)
+		}
 		return rows
+	case stacked:
+		rows := m.detailsLines(w, l.paneHeight)
+		rows = append(rows, m.theme.dim.Render(rule(w)))
+		return append(rows, m.body(w, l.listHeight)...)
+	default:
+		return m.body(w, height)
 	}
-	details := m.detailsLines(pane, height)
-	divider := m.theme.dim.Render("│")
-	for i := range rows {
-		rows[i] = fill(details[i], pane) + divider + fill(rows[i], list)
-	}
-	return rows
 }
 
 // fill pads a rendered line with spaces to w columns.

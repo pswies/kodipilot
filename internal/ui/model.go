@@ -630,7 +630,7 @@ func (m *Model) current() *level {
 }
 
 // listHeight is the number of list rows on screen.
-func (m *Model) listHeight() int { return max(0, m.middleHeight()-1) } // below the column header
+func (m *Model) listHeight() int { return max(0, m.layout().listHeight-1) } // below the column header
 
 // middleHeight is the number of rows between the header and the status
 // line.

@@ -22,11 +22,6 @@ import (
 
 const (
 	detailsDelay   = 120 * time.Millisecond // the details fetch waits for the cursor to rest
-	paneMinWidth   = 90                     // narrower terminals have no pane
-	paneMinHeight  = 14
-	wideWidth      = 120 // from here the list gets a quarter of the width
-	listMinWidth   = 32
-	listMaxWidth   = 40 // on medium terminals
 	detailLabelGap = 2
 )
 
@@ -129,40 +124,10 @@ func (m *Model) shown() *details {
 	return d
 }
 
-// layout returns the width of the list and of the details pane (0 for
-// none), which share the screen with a one-column divider: the pane on the
-// left, the list on the right.
-func (m *Model) layout() (list, pane int) {
-	w := m.width
-	if _, _, ok := m.highlighted(); !ok || m.paneHidden || !m.paneFits() {
-		return w, 0
-	}
-	if w >= wideWidth {
-		list = max(listMinWidth, w/4)
-	} else {
-		list = min(listMaxWidth, max(listMinWidth, w*3/10))
-	}
-	return list, w - list - 1
-}
-
-func (m *Model) paneFits() bool { return m.width >= paneMinWidth && m.height >= paneMinHeight }
-
-// fullDetails reports whether the details fill the screen instead of the
-// list (on terminals too small for the pane).
-func (m *Model) fullDetails() bool {
-	_, _, ok := m.highlighted()
-	return ok && m.detailsFull && !m.paneFits()
-}
-
-func (m *Model) detailsShown() bool {
-	_, pane := m.layout()
-	return pane > 0 || m.fullDetails()
-}
-
 // toggleDetails shows or hides the pane, or the full-screen details when
-// the pane does not fit.
+// no pane fits.
 func (m *Model) toggleDetails() tea.Cmd {
-	if m.paneFits() {
+	if m.paneTier() != listOnly {
 		m.paneHidden = !m.paneHidden
 	} else {
 		m.detailsFull = !m.detailsFull
@@ -174,7 +139,7 @@ func (m *Model) toggleDetails() tea.Cmd {
 // it schedules a details fetch for when the cursor rests, and it starts
 // rendering the image the pane needs.
 func (m *Model) followDetails() tea.Cmd {
-	if m.paneFits() {
+	if m.paneTier() != listOnly {
 		m.detailsFull = false
 	}
 	key, _, ok := m.highlighted()
@@ -420,11 +385,8 @@ func (m *Model) renderArt() tea.Cmd {
 // paneSize returns the inner size of the details pane or the full-screen
 // details: one column of margin each side.
 func (m *Model) paneSize() (w, h int) {
-	_, pane := m.layout()
-	if m.fullDetails() {
-		pane = m.width
-	}
-	return max(0, pane-2), m.middleHeight()
+	l := m.layout()
+	return max(0, l.paneWidth-2), l.paneHeight
 }
 
 // detailsLines renders the details of the highlighted item in exactly

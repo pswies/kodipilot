@@ -160,7 +160,8 @@ playing. Kodi refuses to remove the playing item, and so does kodipilot.
 
 On terminals at least 90 columns wide and 14 rows tall, a pane left of the list
 shows the highlighted item. On 120 columns and more the list takes a quarter of
-the width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
+the width. Narrower but tall terminals (at least 26 rows) show the details above
+the list, across the full width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
 it opens the details full-screen instead (Esc, `←` or `i` close them). `[` and
 `]` scroll the details. The image sits at the top left in a box 32, 64 or 96
 columns wide, the largest that leaves the text 50 columns beside it; the text
