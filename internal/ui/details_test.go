@@ -374,10 +374,10 @@ func TestLongTextFlowsUnderImage(t *testing.T) {
 }
 
 func TestStackedWhenNarrow(t *testing.T) {
-	h := detailsHarness(t, 90, 30, writeCover(t)) // a 57-column pane
+	h := detailsHarness(t, 52, 40, writeCover(t)) // stacked, 50 inner columns: 16 beside the box
 	art, lines := artColumns(h), docLines(h)
 	_, rows, _ := h.m.imageBox(h.m.paneSize())
-	if inner, _ := h.m.paneSize(); inner-art-besideGap >= besideMin {
+	if inner, _ := h.m.paneSize(); textBeside(inner, art) {
 		t.Fatalf("room beside the image: %d columns", inner-art-besideGap)
 	}
 	for y := range rows {

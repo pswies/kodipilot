@@ -334,8 +334,9 @@ func (m *Model) artOptions() art.Options {
 // imageBox returns the image area of a pane w×h, reserved whether the item
 // has an image or not, so that the text starts at the same place either
 // way. It is the largest standard box that leaves besideMin columns for
-// the text beside it or, failing that, the smallest standard box with the
-// text below. It may be taller than the pane: the details scroll. It is
+// the text beside it or, failing that, the smallest standard box (with the
+// text beside it or below, see textBeside). It may be taller than the
+// pane: the details scroll. It is
 // false when images are off, the pane is under imageBoxMinRows tall, or
 // narrower than the smallest box.
 func (m *Model) imageBox(w, h int) (cols, rows int, ok bool) {
@@ -440,8 +441,8 @@ func (m *Model) scrollDetailsDown() tea.Cmd { return m.scrollDetails(+1) }
 // detailsDoc lays out the details of the highlighted item as one document of
 // lines w columns wide (margins included), for a pane height lines tall.
 //
-// The image sits at the top left. When there are at least besideMin columns
-// to its right, the text starts there and flows on under the image at the
+// The image sits at the top left. When there is room to its right (see
+// textBeside), the text starts there and flows on under the image at the
 // full width; otherwise the text starts below the image.
 func (m *Model) detailsDoc(w, height int) []string {
 	t := m.theme
@@ -475,7 +476,7 @@ func (m *Model) detailsDoc(w, height int) []string {
 	}
 	side, textTop := 0, 0
 	if len(art) > 0 {
-		if inner-cols-besideGap >= besideMin {
+		if textBeside(inner, cols) {
 			side = cols + besideGap
 		} else {
 			textTop = len(art) + 1 // below the image and a blank line
@@ -528,7 +529,8 @@ func (m *Model) detailsDoc(w, height int) []string {
 
 const (
 	besideGap    = 2  // between the image and the text beside it
-	besideMin    = 50 // the least width for text beside the image
+	besideMin    = 50 // the text width beside the image that picks the box size
+	besideNarrow = 20 // the least text width beside the image
 	textMaxWidth = 88 // the details text is no wider, for reading
 )
 
@@ -637,3 +639,7 @@ func (m *Model) cachedArt(url string, cols, rows int) (string, bool) {
 	}
 	return m.opts.Images.Cached(url, cols, rows, m.artOptions())
 }
+
+// textBeside reports whether the text goes beside an image box cols wide in
+// a pane inner columns wide: with besideNarrow columns or more to spare.
+func textBeside(inner, cols int) bool { return inner-cols-besideGap >= besideNarrow }
