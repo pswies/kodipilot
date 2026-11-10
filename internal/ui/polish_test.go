@@ -304,7 +304,12 @@ func TestDetailsTextWidthCapped(t *testing.T) {
 	h := detailsHarness(t, 300, 40, "")
 	h.press("down", "down")
 	h.advance(detailsDelay)
+	w, height := h.m.paneSize()
+	box, _, _ := h.m.imageBox(w, height)
 	for _, l := range docLines(h) {
+		if strings.HasPrefix(l, " ╭") || strings.HasPrefix(l, " │") || strings.HasPrefix(l, " ╰") {
+			l = string([]rune(l)[1+box+besideGap:]) // the image does not count
+		}
 		if w := ansi.StringWidth(strings.TrimRight(l, " ")); w > 1+textMaxWidth {
 			t.Errorf("details line is %d wide: %q", w, l)
 		}

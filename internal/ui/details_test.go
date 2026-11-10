@@ -218,26 +218,98 @@ func TestCover(t *testing.T) {
 
 func TestMissingCover(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "/no/such/cover.jpg")
-	// No image: the text starts at the top of the pane.
-	if l := h.screen()[1]; !strings.HasPrefix(l, " Brian Eno") {
+	// A failed image: the box says so, and the text is beside it.
+	h.want("no image available")
+	h.wantNot("loading")
+	if l := h.screen()[1]; !strings.HasPrefix(l, " ╭") || !strings.Contains(l, "╮  Brian Eno") {
 		t.Errorf("first pane line %q", l)
 	}
-	h.wantNot("loading")
 }
 
 func TestPlaceholder(t *testing.T) {
-	lines := placeholder(20, 5)
-	if len(lines) != 5 || !strings.Contains(strings.Join(lines, ""), "loading…") {
-		t.Errorf("placeholder %q", lines)
-	}
-	for _, l := range lines {
-		if w := ansi.StringWidth(l); w != 20 {
-			t.Errorf("placeholder line %q is %d wide", l, w)
+	for _, tc := range []struct {
+		w, h int
+		want string
+	}{
+		{30, 7, "no image available"},
+		{22, 4, "no image available"},
+		{21, 4, "no image"},
+		{12, 4, "no image"},
+		{11, 4, ""},
+		{8, 4, ""},
+	} {
+		lines := placeholder(tc.w, tc.h, "no image available", "no image")
+		text := strings.TrimSpace(strings.Trim(strings.Join(lines, ""), "╭╮╰╯─│ "))
+		text = strings.Join(strings.Fields(strings.ReplaceAll(text, "│", " ")), " ")
+		if len(lines) != tc.h || text != tc.want {
+			t.Errorf("%dx%d: %d lines with %q, want %q", tc.w, tc.h, len(lines), text, tc.want)
+		}
+		for _, l := range lines {
+			if w := ansi.StringWidth(l); w != tc.w {
+				t.Errorf("%dx%d: line %q is %d wide", tc.w, tc.h, l, w)
+			}
 		}
 	}
 	if placeholder(1, 5) != nil {
 		t.Error("placeholder in 1 column")
 	}
+}
+
+// textStart returns where the title starts in the details document.
+func textStart(h *harness, title string) (row, col int) {
+	for y, l := range docLines(h) {
+		if i := strings.Index(l, title); i >= 0 {
+			return y, ansi.StringWidth(l[:i])
+		}
+	}
+	return -1, -1
+}
+
+func TestTextStartsInTheSamePlace(t *testing.T) {
+	cover := writeCover(t)
+	for _, size := range [][2]int{{120, 30}, {170, 45}, {100, 20}, {90, 30}, {240, 60}} {
+		with := detailsHarness(t, size[0], size[1], cover)
+		without := detailsHarness(t, size[0], size[1], "")
+		failed := detailsHarness(t, size[0], size[1], "/no/such/cover.jpg")
+		r1, c1 := textStart(with, "Brian Eno")
+		r2, c2 := textStart(without, "Brian Eno")
+		r3, c3 := textStart(failed, "Brian Eno")
+		if r1 < 0 || r1 != r2 || c1 != c2 || r1 != r3 || c1 != c3 {
+			t.Errorf("%v: text at (%d, %d) with an image, (%d, %d) without, (%d, %d) failed", size, r1, c1, r2, c2, r3, c3)
+		}
+	}
+}
+
+func TestLoadingFrameFillsTheBox(t *testing.T) {
+	h := detailsHarness(t, 120, 30, writeCover(t))
+	h.press("down") // David Byrne: details not fetched yet
+	w, height := h.m.paneSize()
+	cols, rows, ok := h.m.imageBox(w, height)
+	if !ok {
+		t.Fatal("no image box")
+	}
+	lines := docLines(h)
+	if !strings.Contains(strings.Join(lines[:rows], ""), "loading…") {
+		t.Fatalf("no loading frame:\n%s", strings.Join(lines, "\n"))
+	}
+	if top := []rune(lines[0]); string(top[1]) != "╭" || string(top[cols]) != "╮" {
+		t.Errorf("frame top %q is not %d wide", lines[0], cols)
+	}
+	if bottom := []rune(lines[rows-1]); string(bottom[1]) != "╰" || string(bottom[cols]) != "╯" {
+		t.Errorf("frame bottom %q is not on row %d", lines[rows-1], rows)
+	}
+}
+
+func TestNoImageBoxWhenTiny(t *testing.T) {
+	h := detailsHarness(t, 20, 9, "") // full-screen details, a box under 4 rows
+	h.press("i")
+	h.advance(detailsDelay)
+	w, height := h.m.paneSize()
+	if _, _, ok := h.m.imageBox(w, height); ok {
+		t.Fatalf("an image box in %dx%d", w, height)
+	}
+	h.wantNot("╭", "no image")
+	h.want("Brian Eno")
 }
 
 // docLines returns the details document as plain lines.
@@ -253,7 +325,7 @@ func docLines(h *harness) []string {
 // artColumns returns the width of the image at the top of the document.
 func artColumns(h *harness) int {
 	w, height := h.m.paneSize()
-	cols, rows, _ := h.m.artBox(h.m.shown(), w, height)
+	cols, rows, _ := h.m.imageBox(w, height)
 	s, ok := h.m.cachedArt(h.m.shown().image, cols, rows)
 	if !ok {
 		h.t.Fatal("the image is not rendered")

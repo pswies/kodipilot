@@ -147,7 +147,6 @@ type Model struct {
 	detailsTop      int                  // the details' scroll position, in lines
 	artPending      map[string]bool      // images being rendered
 	artFailed       map[string]bool      // art URLs without an image
-	hadImage        bool                 // the last details shown had an image
 	offline         bool                 // Kodi did not answer the last poll
 	video           bool                 // a video plays
 
