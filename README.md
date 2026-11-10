@@ -164,8 +164,8 @@ the width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
 it opens the details full-screen instead (Esc, `←` or `i` close them). `[` and
 `]` scroll the details. The image sits at the top left in a box 32, 64 or 96
 columns wide, the largest that leaves the text 50 columns beside it; the text
-flows on underneath. On narrow panes the image takes the whole width, with the
-text below.
+flows on underneath. On narrower panes the image keeps the 32-column box, with
+the text below it; under 32 columns there is no image.
 
 - **Artist:** image, genre, style, born / formed / years active, album count and
   biography.
