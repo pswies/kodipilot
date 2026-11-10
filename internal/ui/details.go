@@ -183,9 +183,6 @@ func (m *Model) followDetails() tea.Cmd {
 		m.detailsKey = itemKey{}
 		return nil
 	}
-	if d := m.info[key]; d != nil {
-		m.hadImage = d.image != "" && !m.artFailed[d.image]
-	}
 	var cmds []tea.Cmd
 	if key != m.detailsKey {
 		m.detailsKey, m.detailsTop = key, 0
@@ -370,23 +367,31 @@ func (m *Model) artOptions() art.Options {
 	return opts
 }
 
-// artBox returns the space for the image of the details shown in a pane
-// w×h, or false when there is no image to show.
-func (m *Model) artBox(d *details, w, h int) (cols, rows int, ok bool) {
-	if d == nil || d.image == "" || m.opts.Images == nil || m.artFailed[d.image] {
+// imageBox returns the image area of a pane w×h: the box a square image
+// gets at the top of the pane, whether the item has an image or not, so
+// that the text starts at the same place either way. It is false when
+// images are off or the box would be too small to mean anything.
+func (m *Model) imageBox(w, h int) (cols, rows int, ok bool) {
+	if m.opts.Images == nil {
 		return 0, 0, false
 	}
-	cols, rows = w, h*artShare/100
-	return cols, rows, cols >= 4 && rows >= 2
+	cols, rows = art.Fit(1, 1, w, h*artShare/100)
+	return cols, rows, cols >= imageBoxMinCols && rows >= imageBoxMinRows
 }
+
+// The smallest image box worth showing.
+const (
+	imageBoxMinCols = 8
+	imageBoxMinRows = 4
+)
 
 // renderArt starts rendering the image the details pane shows, unless it is
 // rendered or rendering already.
 func (m *Model) renderArt() tea.Cmd {
 	d := m.shown()
 	w, h := m.paneSize()
-	cols, rows, ok := m.artBox(d, w, h)
-	if !ok {
+	cols, rows, ok := m.imageBox(w, h)
+	if !ok || d.image == "" || m.artFailed[d.image] {
 		return nil
 	}
 	opts, loader, url := m.artOptions(), m.opts.Images, d.image
@@ -473,25 +478,35 @@ func (m *Model) detailsDoc(w, height int) []string {
 	inner := max(0, w-2)
 	d := m.shown()
 
+	// The image box: the image, fitted top left, or a frame saying why
+	// there is none (yet).
 	var art []string
-	cols, rows, ok := m.artBox(d, inner, height)
-	if !ok && d.loading && m.hadImage { // keep the image's place
-		cols, rows, ok = inner, height*artShare/100, inner >= 4 && height*artShare/100 >= 2
-	}
+	cols, rows, ok := m.imageBox(inner, height)
 	if ok {
-		if s, done := m.cachedArt(d.image, cols, rows); done {
-			art = strings.Split(s, "\n")
-		} else {
-			for _, l := range placeholder(min(cols, 2*rows), rows) {
-				art = append(art, t.dim.Render(l))
-			}
+		var frame []string
+		image, done := m.cachedArt(d.image, cols, rows)
+		switch {
+		case done:
+			art = strings.Split(image, "\n")
+		case d.loading || d.image != "" && !m.artFailed[d.image]:
+			frame = placeholder(cols, rows, "loading…")
+		default:
+			frame = placeholder(cols, rows, "no image available", "no image")
+		}
+		for _, l := range frame {
+			art = append(art, t.dim.Render(l))
+		}
+		for i := range art {
+			art[i] = fill(art[i], cols) // an image narrower than the box
+		}
+		for len(art) < rows { // or shorter
+			art = append(art, strings.Repeat(" ", cols))
 		}
 	}
-	artWidth, side, textTop := 0, 0, 0
+	side, textTop := 0, 0
 	if len(art) > 0 {
-		artWidth = ansi.StringWidth(art[0])
-		if inner-artWidth-besideGap >= besideMin {
-			side = artWidth + besideGap
+		if inner-cols-besideGap >= besideMin {
+			side = cols + besideGap
 		} else {
 			textTop = len(art) + 1 // below the image and a blank line
 		}
@@ -621,16 +636,24 @@ func cut(text string, w int) (string, string) {
 	return text[:end], strings.TrimLeft(text[end:], " ")
 }
 
-// placeholder is a dim frame with "loading…" in it.
-func placeholder(w, h int) []string {
+// placeholder is a w×h frame with the first of texts that fits centred in
+// it, or none; nil when there is no room for a frame.
+func placeholder(w, h int, texts ...string) []string {
 	if w < 2 || h < 2 {
 		return nil
+	}
+	text := ""
+	for _, t := range texts {
+		if width(t) <= w-4 { // a space of margin each side
+			text = t
+			break
+		}
 	}
 	lines := []string{"╭" + strings.Repeat("─", w-2) + "╮"}
 	for i := 1; i < h-1; i++ {
 		inside := strings.Repeat(" ", w-2)
-		if i == (h-1)/2 {
-			inside = pad(strings.Repeat(" ", max(0, (w-2-8)/2))+"loading…", w-2)
+		if i == (h-1)/2 && text != "" {
+			inside = pad(strings.Repeat(" ", (w-2-width(text))/2)+text, w-2)
 		}
 		lines = append(lines, "│"+inside+"│")
 	}
