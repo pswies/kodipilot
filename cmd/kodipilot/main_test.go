@@ -21,7 +21,7 @@ func TestHelpAndVersion(t *testing.T) {
 	if err := run([]string{"--help"}, &out, &errOut); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--host", "--transport", "KODIPILOT_PASSWORD", "Everywhere", "Queue", "in Kodi", "kodipilot lets you steer", "Piotr Święs"} {
+	for _, want := range []string{"--host", "--transport", "KODIPILOT_PASSWORD", "Everywhere", "Queue", "kodipilot lets you steer", "Piotr Święs"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("--help lacks %q", want)
 		}

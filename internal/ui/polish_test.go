@@ -23,7 +23,7 @@ import (
 )
 
 func TestHelpRules(t *testing.T) {
-	for width, kodi := range map[int]bool{80: true, 60: false} {
+	for _, width := range []int{80, 60} {
 		h := newHarness(t, width, 80)
 		h.press("?")
 		inner := h.m.helpInner()
@@ -37,12 +37,9 @@ func TestHelpRules(t *testing.T) {
 			if heading == "" || ansi.StringWidth(heading) != inner || !strings.HasSuffix(heading, "─") {
 				t.Errorf("width %d: %s heading %q", width, section.title, heading)
 			}
-			if strings.Contains(heading, "in Kodi") && (!kodi || !strings.Contains(heading, "─ in Kodi ─")) {
+			if strings.Contains(heading, "in Kodi") {
 				t.Errorf("width %d: %q", width, heading)
 			}
-		}
-		if got := h.contains("in Kodi"); got != kodi {
-			t.Errorf("width %d: in Kodi %v", width, got)
 		}
 	}
 }
