@@ -42,27 +42,22 @@ func TestImageBoxSizes(t *testing.T) {
 	}
 }
 
-func TestFullScreenDetailsStacked(t *testing.T) {
-	h := detailsHarness(t, 80, 24, writeCover(t))
+func TestFullScreenDetailsBeside(t *testing.T) {
+	h := detailsHarness(t, 60, 24, writeCover(t)) // 58 inner columns: 24 beside the box
 	h.press("i")
 	h.advance(detailsDelay)
-	lines := docLines(h)
-	art := artColumns(h)
-	if art > 32 {
-		t.Fatalf("image %d columns wide, want the 32-column box", art)
+	if !h.m.fullDetails() {
+		t.Fatal("no full-screen details")
 	}
-	for y := range 16 {
-		if strings.Contains(lines[y], "Brian Eno") {
-			t.Errorf("text beside the box on line %d: %q", y, lines[y])
+	lines := h.screen()
+	if !strings.Contains(lines[1], "  Brian Eno") || !strings.Contains(lines[2], "Genre   Ambient,") {
+		t.Errorf("the title and fields are not beside the box:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > 60 {
+			t.Errorf("line %q is %d wide", l, w)
 		}
-		if w := ansi.StringWidth(strings.TrimRight(lines[y], " ")); w > 1+32 {
-			t.Errorf("line %d of the box is %d wide: %q", y, w, lines[y])
-		}
 	}
-	if got := strings.TrimRight(lines[17], " "); got != " Brian Eno" {
-		t.Errorf("first text line %q, want the title under the box", got)
-	}
-	h.want("Brian Eno") // 16 + 1 rows: the title is on screen
 }
 
 func TestNoBoxUnder32Columns(t *testing.T) {
@@ -236,18 +231,18 @@ func TestStackedScreen(t *testing.T) {
 	if !strings.Contains(lines[divider+1], "Artist") || !strings.Contains(lines[divider+2], "▌ Brian Eno") {
 		t.Errorf("no list under the divider:\n%s", strings.Join(lines, "\n"))
 	}
-	// The image rules at the full width: 78 inner columns leave too little
-	// beside the 32-column box, so the text is below it.
+	// The image rules at the full width: 78 inner columns take the 32-column
+	// box, with the text beside it.
 	if cols, _, _ := h.m.imageBox(h.m.paneSize()); cols != 32 {
 		t.Errorf("box %d columns", cols)
 	}
-	if strings.Contains(strings.Join(lines[1:17], ""), "Brian Eno  ") || !strings.HasPrefix(lines[18], " Brian Eno") {
-		t.Errorf("the text is not under the image:\n%s", strings.Join(lines[:20], "\n"))
+	if !strings.Contains(lines[1], "  Brian Eno") {
+		t.Errorf("the text is not beside the image:\n%s", strings.Join(lines[:20], "\n"))
 	}
-	// 89 columns leave 53 beside it.
-	h.send(tea.WindowSizeMsg{Width: 89, Height: 40})
-	if !strings.Contains(h.screen()[1], "  Brian Eno") {
-		t.Errorf("the text is not beside the image: %q", h.screen()[1])
+	// 50 columns leave too little beside it: the text goes below.
+	h.send(tea.WindowSizeMsg{Width: 50, Height: 40})
+	if strings.Contains(h.screen()[1], "Brian Eno") || !strings.HasPrefix(h.screen()[18], " Brian Eno") {
+		t.Errorf("the text is not under the image:\n%s", strings.Join(h.screen()[:20], "\n"))
 	}
 }
 
@@ -314,5 +309,65 @@ func TestTallNarrowSizes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestTextBeside(t *testing.T) {
+	m := New(nil, &fakeClock{}, Options{Images: artwork.NewLoader(artwork.Config{})})
+	for inner, want := range map[int]bool{40: false, 52: false, 53: false, 54: true, 60: true, 83: true} {
+		cols, _, _ := m.imageBox(inner, 40)
+		if cols != 32 || textBeside(inner, cols) != want {
+			t.Errorf("inner %d: box %d, text beside %v; want 32, %v", inner, cols, textBeside(inner, cols), want)
+		}
+	}
+}
+
+func TestStackedAt75(t *testing.T) {
+	h := detailsHarness(t, 75, 50, writeCover(t))
+	if h.m.layout().tier != stacked {
+		t.Fatalf("tier %d", h.m.layout().tier)
+	}
+	lines := h.screen()
+	for i, want := range []string{"  Brian Eno", "  Genre   Ambient, Electronic", "  Born    1948-05-15", "  Active  1970s, 2020s", "  Albums  5"} {
+		if !strings.Contains(lines[1+i], want) {
+			t.Errorf("line %d %q lacks %q", 1+i, lines[1+i], want)
+		}
+	}
+}
+
+func TestFieldValuesWrapBesideTheBox(t *testing.T) {
+	music := koditest.NewMusic()
+	cover := writeCover(t)
+	music.SetCover(cover)
+	music.Reply("AudioLibrary.GetArtistDetails", map[string]any{"artistdetails": map[string]any{
+		"genre": []string{"Progressive rock", "Alternative rock", "Gothic metal", "Doom metal"},
+		"art":   map[string]string{"thumb": "image://" + strings.ReplaceAll(cover, "/", "%2f") + "/"},
+	}})
+	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
+	h.m = New(music, h.clock, Options{Images: artwork.NewLoader(artwork.Config{})})
+	h.send(tea.WindowSizeMsg{Width: 60, Height: 50}) // stacked: 58 inner, 24 beside the box
+	h.run(h.m.Init())
+	h.advance(detailsDelay)
+	lines, art := docLines(h), artColumns(h)
+	var besides []string
+	for _, l := range lines[:16] {
+		besides = append(besides, beside(l, art))
+	}
+	text := words(strings.Join(besides, " "))
+	if !strings.Contains(text, "Genre Progressive rock, Alternative rock, Gothic metal, Doom metal Albums 5") ||
+		strings.Contains(text, "…") {
+		t.Errorf("the genres are cut:\n%s", strings.Join(lines, "\n"))
+	}
+	valueColumn := -1
+	for _, l := range lines[:6] {
+		rest := beside(l, art)
+		if strings.HasPrefix(rest, "Genre") {
+			valueColumn = strings.Index(rest, "Progressive")
+		} else if valueColumn > 0 && strings.TrimSpace(rest) != "" && strings.TrimSpace(rest[:valueColumn]) == "" {
+			valueColumn = -2 // a continuation under the value column
+		}
+	}
+	if valueColumn != -2 {
+		t.Errorf("no continuation under the value column:\n%s", strings.Join(lines[:6], "\n"))
 	}
 }
