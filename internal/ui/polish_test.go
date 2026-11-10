@@ -51,7 +51,7 @@ func TestFirstScreenUnreachable(t *testing.T) {
 	h.m = New(music, h.clock, Options{})
 	h.send(tea.WindowSizeMsg{Width: 100, Height: 24})
 	h.run(h.m.Init())
-	if _, pane := h.m.layout(); pane != 0 {
+	if pane := h.m.layout().paneWidth; pane != 0 {
 		t.Errorf("a details pane with nothing to show: %d columns", pane)
 	}
 	text := words(strings.Join(h.screen(), "\n"))

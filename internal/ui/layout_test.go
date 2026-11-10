@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/pswies/kodipilot/internal/artwork"
+	"github.com/pswies/kodipilot/internal/kodi"
+	"github.com/pswies/kodipilot/internal/kodi/koditest"
 )
 
 func TestImageBoxSizes(t *testing.T) {
@@ -166,6 +169,150 @@ func TestCursorVisibleUnderHeader(t *testing.T) {
 		}
 		if !strings.Contains(h.screen()[1], "Year") {
 			t.Errorf("after %s the header scrolled away", key)
+		}
+	}
+}
+
+func TestLayoutTiers(t *testing.T) {
+	for _, tc := range []struct {
+		width, height int
+		tier          tier
+		list, pane    int // widths
+	}{
+		{80, 24, listOnly, 80, 0},
+		{80, 40, stacked, 80, 80},
+		{60, 50, stacked, 60, 60},
+		{89, 26, stacked, 89, 89}, // a body of 23 rows
+		{89, 25, listOnly, 89, 0},
+		{30, 60, stacked, 30, 30},
+		{90, 30, sideBySide, 32, 57},
+		{100, 30, sideBySide, 32, 67},
+		{119, 30, sideBySide, 35, 83},
+		{120, 30, sideBySide, 32, 87},
+		{200, 30, sideBySide, 50, 149},
+		{240, 50, sideBySide, 60, 179},
+		{200, 13, listOnly, 200, 0},
+	} {
+		h := newHarness(t, tc.width, tc.height)
+		l := h.m.layout()
+		if l.tier != tc.tier || l.listWidth != tc.list || l.paneWidth != tc.pane {
+			t.Errorf("%dx%d: %+v, want tier %d, list %d, pane %d", tc.width, tc.height, l, tc.tier, tc.list, tc.pane)
+		}
+		body := tc.height - 3
+		switch l.tier {
+		case stacked:
+			if l.paneHeight < stackedMinDetail || l.listHeight < stackedMinList || l.paneHeight+1+l.listHeight != body {
+				t.Errorf("%dx%d: details %d, list %d rows of %d", tc.width, tc.height, l.paneHeight, l.listHeight, body)
+			}
+		case sideBySide:
+			if l.paneHeight != body || l.listHeight != body {
+				t.Errorf("%dx%d: heights %+v", tc.width, tc.height, l)
+			}
+		default:
+			if l.listHeight != body {
+				t.Errorf("%dx%d: list %d rows, want %d", tc.width, tc.height, l.listHeight, body)
+			}
+		}
+	}
+}
+
+func TestStackedHeights(t *testing.T) {
+	for body, details := range map[int]int{23: 12, 24: 13, 30: 17, 40: 22, 50: 28, 100: 55} {
+		h := newHarness(t, 80, body+3)
+		if l := h.m.layout(); l.paneHeight != details || l.listHeight != body-details-1 {
+			t.Errorf("body %d: details %d, list %d; want details %d", body, l.paneHeight, l.listHeight, details)
+		}
+	}
+}
+
+func TestStackedScreen(t *testing.T) {
+	h := detailsHarness(t, 80, 40, writeCover(t))
+	l := h.m.layout()
+	lines := h.screen()
+	divider := 1 + l.paneHeight
+	if lines[divider] != strings.Repeat("─", 80) {
+		t.Errorf("line %d is %q, want the divider", divider, lines[divider])
+	}
+	if !strings.Contains(lines[divider+1], "Artist") || !strings.Contains(lines[divider+2], "▌ Brian Eno") {
+		t.Errorf("no list under the divider:\n%s", strings.Join(lines, "\n"))
+	}
+	// The image rules at the full width: 78 inner columns leave too little
+	// beside the 32-column box, so the text is below it.
+	if cols, _, _ := h.m.imageBox(h.m.paneSize()); cols != 32 {
+		t.Errorf("box %d columns", cols)
+	}
+	if strings.Contains(strings.Join(lines[1:17], ""), "Brian Eno  ") || !strings.HasPrefix(lines[18], " Brian Eno") {
+		t.Errorf("the text is not under the image:\n%s", strings.Join(lines[:20], "\n"))
+	}
+	// 89 columns leave 53 beside it.
+	h.send(tea.WindowSizeMsg{Width: 89, Height: 40})
+	if !strings.Contains(h.screen()[1], "  Brian Eno") {
+		t.Errorf("the text is not beside the image: %q", h.screen()[1])
+	}
+}
+
+func TestStackedToggle(t *testing.T) {
+	h := newHarness(t, 80, 40) // no images: the biography is in view
+	h.advance(detailsDelay)
+	h.want("Biography")
+	h.press("i")
+	if l := h.m.layout(); l.tier != listOnly || l.listHeight != 37 {
+		t.Errorf("hidden: %+v", l)
+	}
+	h.wantNot("Biography", "────")
+	h.press("i")
+	if h.m.layout().tier != stacked {
+		t.Error("i did not bring the details back")
+	}
+	h.want("Biography")
+}
+
+func TestStackedPaging(t *testing.T) {
+	music := koditest.NewMusic()
+	var artists []kodi.Artist
+	var albums []kodi.Album
+	for i := 1; i <= 60; i++ {
+		artists = append(artists, kodi.Artist{ID: i, Name: fmt.Sprintf("Artist %02d", i)})
+		albums = append(albums, kodi.Album{ID: i, Title: "Album", ArtistIDs: []int{i}})
+	}
+	music.Reply("AudioLibrary.GetArtists", map[string]any{"artists": artists})
+	music.Reply("AudioLibrary.GetAlbums", map[string]any{"albums": albums})
+	h := &harness{t: t, kodi: music, clock: &fakeClock{}}
+	h.m = New(music, h.clock, Options{})
+	h.send(tea.WindowSizeMsg{Width: 80, Height: 40})
+	h.run(h.m.Init())
+	rows := h.m.layout().listHeight - 1
+	if h.m.layout().tier != stacked || rows != 15 {
+		t.Fatalf("layout %+v", h.m.layout())
+	}
+	h.press("pgdown")
+	if got := h.selected(); !strings.HasPrefix(got, fmt.Sprintf("Artist %02d", 1+rows)) {
+		t.Errorf("after PgDn: %q", got)
+	}
+	h.press("pgdown", "pgdown", "end")
+	if got := h.selected(); !strings.HasPrefix(got, "Artist 60") {
+		t.Errorf("after End: %q (the cursor must stay on screen)", got)
+	}
+}
+
+func TestTallNarrowSizes(t *testing.T) {
+	h := detailsHarness(t, 80, 40, writeCover(t))
+	h.press("down", "down")
+	h.advance(detailsDelay)
+	for _, size := range [][2]int{{30, 60}, {50, 80}, {20, 40}, {60, 50}, {80, 40}, {89, 26}, {31, 30}, {32, 30}} {
+		for _, keys := range [][]string{nil, {"]", "]"}, {"i"}, {"i"}} {
+			h.press(keys...)
+			h.send(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+			h.advance(detailsDelay)
+			lines := strings.Split(h.m.render(), "\n")
+			if len(lines) > size[1] {
+				t.Errorf("%v: %d lines", size, len(lines))
+			}
+			for _, l := range lines {
+				if w := ansi.StringWidth(l); w > size[0] {
+					t.Errorf("%v: line %q is %d wide", size, ansi.Strip(l), w)
+				}
+			}
 		}
 	}
 }

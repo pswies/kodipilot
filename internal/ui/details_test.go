@@ -55,25 +55,6 @@ func detailsHarness(t *testing.T, width, height int, cover string) *harness {
 	return h
 }
 
-func TestLayout(t *testing.T) {
-	for _, tc := range []struct{ width, height, list, pane int }{
-		{80, 30, 80, 0},
-		{89, 30, 89, 0},
-		{90, 30, 32, 57},
-		{100, 30, 32, 67},
-		{119, 30, 35, 83},
-		{120, 30, 32, 87},
-		{200, 30, 50, 149},
-		{240, 50, 60, 179},
-		{200, 13, 200, 0},
-	} {
-		h := newHarness(t, tc.width, tc.height)
-		if list, pane := h.m.layout(); list != tc.list || pane != tc.pane {
-			t.Errorf("%dx%d: list %d, pane %d; want %d, %d", tc.width, tc.height, list, pane, tc.list, tc.pane)
-		}
-	}
-}
-
 func TestPaneToggle(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "")
 	h.want("Biography")
@@ -90,7 +71,8 @@ func TestPaneToggle(t *testing.T) {
 }
 
 func TestFullScreenDetails(t *testing.T) {
-	h := detailsHarness(t, 80, 64, "") // tall enough to see the text under the box
+	h := newHarness(t, 80, 22) // too short for the stacked pane; no images, so the text is on top
+	h.advance(detailsDelay)
 	h.wantNot("Biography")
 	for _, close := range []string{"esc", "left", "i"} {
 		h.press("i")
@@ -201,7 +183,7 @@ func TestCover(t *testing.T) {
 
 	// The pane is on the left, the image at its left edge (after the
 	// one-column margin), and the list right of the divider.
-	list, pane := h.m.layout()
+	list, pane := h.m.layout().listWidth, h.m.layout().paneWidth
 	row := strings.Split(h.m.render(), "\n")[2]
 	if !strings.HasPrefix(row, " \x1b[") {
 		t.Errorf("the image does not start at the pane's left edge: %q", row)
@@ -342,7 +324,7 @@ func beside(l string, art int) string {
 
 func TestTextBesideImage(t *testing.T) {
 	h := detailsHarness(t, 170, 45, writeCover(t)) // Brian Eno, with an image
-	if _, pane := h.m.layout(); pane != 127 {
+	if pane := h.m.layout().paneWidth; pane != 127 {
 		t.Fatalf("pane %d, want 127", pane)
 	}
 	art := artColumns(h)
