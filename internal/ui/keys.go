@@ -73,7 +73,8 @@ func keyTable() []keySection {
 			{"s", "shuffle on / off", "", bind((*Model).toggleShuffle, "s")},
 			{"F5, ctrl+r", "reload the library", "", bind((*Model).reload, "f5", "ctrl+r")},
 			{"? / h", "this help", "", bind((*Model).openHelp, "?", "h")},
-			{"Q, ctrl+c", "quit (the music keeps playing)", "", bind((*Model).quit, "Q", "ctrl+c")},
+			{"Q", "quit, after asking (the music keeps playing)", "", bind((*Model).quit, "Q")},
+			{"ctrl+c", "quit now", "", bind((*Model).quitNow, "ctrl+c")},
 		}},
 		{"Details", everywhere, []keyRow{
 			{"i", "show / hide (full screen when narrow)", "i", bind((*Model).toggleDetails, "i")},
@@ -82,7 +83,7 @@ func keyTable() []keySection {
 		}},
 		{"Library", inLibrary, []keyRow{
 			{"Enter, →", "open; on a track: play its album from there", "Enter", bind((*Model).open, "enter", "right")},
-			{"←, Backspace, Esc", "back (Esc at the top quits)", "Backspace, Esc", slices.Concat(
+			{"←, Backspace, Esc", "back (Esc at the top asks to quit)", "Backspace, Esc", slices.Concat(
 				bind((*Model).back, "left", "backspace"), bind((*Model).backOrQuit, "esc"))},
 			{"p", "play now: artist, album, or from a track", "p", bind((*Model).play, "p")},
 			{"q", "add to the queue", "q", bind((*Model).enqueue, "q")},

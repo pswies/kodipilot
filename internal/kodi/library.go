@@ -24,6 +24,7 @@ type Album struct {
 	Year          int    `json:"year"` // 0 when unknown
 	ArtistIDs     []int  `json:"artistid"`
 	DisplayArtist string `json:"displayartist"`
+	Duration      int    `json:"albumduration"` // seconds; 0 when unknown
 }
 
 // Song is a track of an album in Kodi's music library.
@@ -62,7 +63,7 @@ func LoadLibrary(ctx context.Context, client Client) (*Library, error) {
 	}
 	var albums struct{ Albums []Album }
 	err = client.Call(ctx, "AudioLibrary.GetAlbums", map[string]any{
-		"properties": []string{"title", "year", "artistid", "displayartist"},
+		"properties": []string{"title", "year", "artistid", "displayartist", "albumduration"},
 	}, &albums)
 	if err != nil {
 		return nil, fmt.Errorf("loading albums: %w", err)

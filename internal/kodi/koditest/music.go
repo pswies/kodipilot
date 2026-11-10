@@ -32,7 +32,7 @@ func Artists() []kodi.Artist {
 func Albums() []kodi.Album {
 	return []kodi.Album{
 		{ID: 10, Title: "Music for Films", Year: 1978, ArtistIDs: []int{1}, DisplayArtist: "Brian Eno"},
-		{ID: 11, Title: "Ambient 1", Year: 1978, ArtistIDs: []int{1}, DisplayArtist: "Brian Eno"},
+		{ID: 11, Title: "Ambient 1", Year: 1978, ArtistIDs: []int{1}, DisplayArtist: "Brian Eno", Duration: 2628},
 		{ID: 12, Title: "My Life in the Bush of Ghosts", Year: 1981, ArtistIDs: []int{1, 2},
 			DisplayArtist: "Brian Eno / David Byrne"},
 		{ID: 13, Title: "another green world", ArtistIDs: []int{1}, DisplayArtist: "Brian Eno"},

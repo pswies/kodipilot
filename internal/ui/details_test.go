@@ -77,20 +77,20 @@ func TestLayout(t *testing.T) {
 func TestPaneToggle(t *testing.T) {
 	h := detailsHarness(t, 120, 30, "")
 	h.want("Biography")
-	if l := h.screen()[1]; !strings.Contains(l, "│▌ Brian Eno") {
+	if l := h.screen()[2]; !strings.Contains(l, "│▌ Brian Eno") { // under the column header
 		t.Errorf("no pane left of the list: %q", l)
 	}
 	h.press("i")
 	h.wantNot("Biography")
-	if strings.Contains(h.screen()[1], "│") {
-		t.Errorf("divider without the pane: %q", h.screen()[1])
+	if strings.Contains(h.screen()[2], "│") {
+		t.Errorf("divider without the pane: %q", h.screen()[2])
 	}
 	h.press("i")
 	h.want("Biography")
 }
 
 func TestFullScreenDetails(t *testing.T) {
-	h := detailsHarness(t, 80, 24, "")
+	h := detailsHarness(t, 80, 64, "") // tall enough to see the text under the box
 	h.wantNot("Biography")
 	for _, close := range []string{"esc", "left", "i"} {
 		h.press("i")
@@ -202,7 +202,7 @@ func TestCover(t *testing.T) {
 	// The pane is on the left, the image at its left edge (after the
 	// one-column margin), and the list right of the divider.
 	list, pane := h.m.layout()
-	row := strings.Split(h.m.render(), "\n")[1]
+	row := strings.Split(h.m.render(), "\n")[2]
 	if !strings.HasPrefix(row, " \x1b[") {
 		t.Errorf("the image does not start at the pane's left edge: %q", row)
 	}
@@ -211,7 +211,8 @@ func TestCover(t *testing.T) {
 		t.Errorf("row %q: want the pane in %d columns, │, then the list", string(plain), pane)
 	}
 	// The text is beside the image, two columns right of it.
-	if art := artColumns(h); !strings.HasPrefix(string(plain[1+art:]), "  Brian Eno") || art < 10 {
+	first := []rune(ansi.Strip(strings.Split(h.m.render(), "\n")[1]))
+	if art := artColumns(h); !strings.HasPrefix(string(first[1+art:]), "  Brian Eno") || art < 10 {
 		t.Errorf("row %q: want the title beside the image", string(plain))
 	}
 }
@@ -301,7 +302,7 @@ func TestLoadingFrameFillsTheBox(t *testing.T) {
 }
 
 func TestNoImageBoxWhenTiny(t *testing.T) {
-	h := detailsHarness(t, 20, 9, "") // full-screen details, a box under 4 rows
+	h := detailsHarness(t, 20, 6, "") // full-screen details in 3 rows
 	h.press("i")
 	h.advance(detailsDelay)
 	w, height := h.m.paneSize()
@@ -375,8 +376,7 @@ func TestLongTextFlowsUnderImage(t *testing.T) {
 
 	art := artColumns(h)
 	lines := docLines(h)
-	_, height := h.m.paneSize()
-	rows := height * artShare / 100
+	_, rows, _ := h.m.imageBox(h.m.paneSize())
 	besideText, belowWide := false, false
 	for y, l := range lines {
 		switch {
@@ -394,8 +394,7 @@ func TestLongTextFlowsUnderImage(t *testing.T) {
 func TestStackedWhenNarrow(t *testing.T) {
 	h := detailsHarness(t, 90, 30, writeCover(t)) // a 57-column pane
 	art, lines := artColumns(h), docLines(h)
-	_, height := h.m.paneSize()
-	rows := height * artShare / 100
+	_, rows, _ := h.m.imageBox(h.m.paneSize())
 	if inner, _ := h.m.paneSize(); inner-art-besideGap >= besideMin {
 		t.Fatalf("room beside the image: %d columns", inner-art-besideGap)
 	}

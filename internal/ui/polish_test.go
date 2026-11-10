@@ -102,7 +102,8 @@ func TestKodiDownMidSession(t *testing.T) {
 	h.kodi.Handle("Player.GetActivePlayers", unavailable)
 	h.advance(time.Second)
 	h.want("■ Kodi unreachable, retrying…", "last known queue · Kodi unreachable", "1  1/1")
-	if !strings.Contains(h.m.render(), h.m.theme.dim.Render("2/1")) {
+	title, _ := h.m.queueColumns(80)
+	if !strings.Contains(h.m.render(), h.m.theme.dim.Render(pad("2/1", title)+"  ")) {
 		t.Error("the stale queue is not dimmed")
 	}
 	if !strings.Contains(h.m.render(), h.m.theme.err.Render(" ■ Kodi unreachable, retrying…")) {
@@ -184,7 +185,7 @@ func TestNowPlayingInLibrary(t *testing.T) {
 	h.want("⏸ 02  2/1")
 	h.press("left")
 	for _, l := range h.screen()[1 : len(h.screen())-2] {
-		if strings.Contains(l, "Ambient 1") && !strings.HasSuffix(strings.TrimRight(l, " "), "▶") {
+		if strings.Contains(l, "Ambient 1") && !strings.Contains(l, "▶ 43:48") {
 			t.Errorf("the playing album is not marked: %q", l)
 		}
 		if strings.Contains(l, "Music for Films") && strings.Contains(l, "▶") {

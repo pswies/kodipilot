@@ -22,7 +22,6 @@ import (
 
 const (
 	detailsDelay   = 120 * time.Millisecond // the details fetch waits for the cursor to rest
-	artShare       = 55                     // the image takes at most this % of the pane height
 	paneMinWidth   = 90                     // narrower terminals have no pane
 	paneMinHeight  = 14
 	wideWidth      = 120 // from here the list gets a quarter of the width
@@ -367,17 +366,27 @@ func (m *Model) artOptions() art.Options {
 	return opts
 }
 
-// imageBox returns the image area of a pane w×h: the box a square image
-// gets at the top of the pane, whether the item has an image or not, so
-// that the text starts at the same place either way. It is false when
-// images are off or the box would be too small to mean anything.
+// imageBox returns the image area of a pane w×h, reserved whether the item
+// has an image or not, so that the text starts at the same place either
+// way. It is the largest standard box that leaves besideMin columns for
+// the text beside it or, failing that, the whole width with the text
+// below. It may be taller than the pane: the details scroll. It is false
+// when images are off or the pane is too small for a box to mean anything.
 func (m *Model) imageBox(w, h int) (cols, rows int, ok bool) {
-	if m.opts.Images == nil {
+	if m.opts.Images == nil || w < imageBoxMinCols || h < imageBoxMinRows {
 		return 0, 0, false
 	}
-	cols, rows = art.Fit(1, 1, w, h*artShare/100)
-	return cols, rows, cols >= imageBoxMinCols && rows >= imageBoxMinRows
+	for _, cols := range imageBoxWidths {
+		if w-cols-besideGap >= besideMin {
+			return cols, cols / 2, true
+		}
+	}
+	return w, w / 2, true // the whole width, with the text below
 }
+
+// imageBoxWidths are the standard widths of the image box, largest first;
+// a box is half as tall, in rows, as it is wide, for a square cover.
+var imageBoxWidths = [...]int{96, 64, 32}
 
 // The smallest image box worth showing.
 const (
@@ -416,7 +425,7 @@ func (m *Model) paneSize() (w, h int) {
 	if m.fullDetails() {
 		pane = m.width
 	}
-	return max(0, pane-2), m.listHeight()
+	return max(0, pane-2), m.middleHeight()
 }
 
 // detailsLines renders the details of the highlighted item in exactly
@@ -558,7 +567,7 @@ func (m *Model) detailsDoc(w, height int) []string {
 
 const (
 	besideGap    = 2  // between the image and the text beside it
-	besideMin    = 28 // the least width for text beside the image
+	besideMin    = 50 // the least width for text beside the image
 	textMaxWidth = 88 // the details text is no wider, for reading
 )
 

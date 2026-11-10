@@ -32,7 +32,7 @@ func (m *Model) render() string {
 	}
 	lines := make([]string, 0, h)
 	lines = append(lines, m.header(w))
-	lines = append(lines, m.middle(w, m.listHeight())...)
+	lines = append(lines, m.middle(w, m.middleHeight())...)
 	lines = append(lines, m.statusLine(w), m.footer(w))
 	screen := strings.Join(lines[:min(h, len(lines))], "\n")
 
@@ -157,7 +157,8 @@ func (m *Model) queueSummary() string {
 	return strings.Join(append(parts, shuffle), " · ")
 }
 
-// body renders the list area: exactly height lines.
+// body renders the list area, a column header and the rows: exactly height
+// lines.
 func (m *Model) body(w, height int) []string {
 	t := m.theme
 	rows := make([]string, 0, height)
@@ -174,8 +175,9 @@ func (m *Model) body(w, height int) []string {
 	case m.view == queueView && len(m.queue) == 0:
 		note("queue is empty — pick something in the library (Tab)", t.dim)
 	case m.view == queueView:
+		rows = append(rows, m.listHeader(w, nil))
 		c := m.queueList
-		for i := c.top; i < min(len(m.queue), c.top+height); i++ {
+		for i := c.top; i < min(len(m.queue), c.top+height-1); i++ {
 			rows = append(rows, m.queueRow(w, i, i == c.index))
 		}
 	case l == nil && errors.Is(m.waitErr, kodi.ErrUnauthorized):
@@ -192,7 +194,8 @@ func (m *Model) body(w, height int) []string {
 	case l.len() == 0:
 		note("No albums.", t.dim)
 	case l.rows != nil: // tracks of several discs, with a row before each disc
-		for _, r := range l.rows[min(l.list.top, len(l.rows)):min(len(l.rows), l.list.top+height)] {
+		rows = append(rows, m.listHeader(w, l))
+		for _, r := range l.rows[min(l.list.top, len(l.rows)):min(len(l.rows), l.list.top+height-1)] {
 			if r < 0 {
 				rows = append(rows, line(w, t.plain, []span{{"  Disc " + strconv.Itoa(-r), t.dim}}, nil))
 			} else {
@@ -200,10 +203,12 @@ func (m *Model) body(w, height int) []string {
 			}
 		}
 	default:
-		for i := l.list.top; i < min(l.len(), l.list.top+height); i++ {
+		rows = append(rows, m.listHeader(w, l))
+		for i := l.list.top; i < min(l.len(), l.list.top+height-1); i++ {
 			rows = append(rows, m.libraryRow(w, l, i, i == l.list.index))
 		}
 	}
+	rows = rows[:min(len(rows), height)]
 	for len(rows) < height {
 		rows = append(rows, "")
 	}
@@ -218,42 +223,117 @@ func (m *Model) rowBase(selected bool) (lipgloss.Style, span) {
 	return m.theme.plain, span{"  ", m.theme.plain}
 }
 
+// The narrowest lists that show a column; narrower lists drop it.
+const (
+	countColumnMin  = 20 // artists: Albums
+	yearColumnMin   = 22 // albums: Year
+	lengthColumnMin = 24 // albums, tracks and the queue: Length
+	artistColumnMin = 60 // the queue: Artist
+)
+
+// listHeader returns the column header of the library level l, or of the
+// queue when l is nil, aligned with the rows.
+func (m *Model) listHeader(w int, l *level) string {
+	t := m.theme
+	length := []span(nil)
+	if w >= lengthColumnMin {
+		length = []span{{"Length ", t.dim}}
+	}
+	switch {
+	case l == nil:
+		title, artist := m.queueColumns(w)
+		left := []span{{"    " + fmt.Sprintf("%*s  ", m.queueDigits(), "#") + pad("Title", title), t.dim}}
+		if artist > 0 {
+			left = append(left, span{"  Artist", t.dim})
+		}
+		return line(w, t.plain, left, length)
+	case l.kind == artistsLevel:
+		var count []span
+		if w >= countColumnMin {
+			count = []span{{"Albums ", t.dim}}
+		}
+		return line(w, t.plain, []span{{"  Artist", t.dim}}, count)
+	case l.kind == albumsLevel:
+		year := ""
+		if w >= yearColumnMin {
+			year = "Year  "
+		}
+		return line(w, t.plain, []span{{"  " + year + "Album", t.dim}}, length)
+	default:
+		return line(w, t.plain, []span{{"     #  Title", t.dim}}, length)
+	}
+}
+
 func (m *Model) libraryRow(w int, l *level, i int, selected bool) string {
 	t := m.theme
 	base, gutter := m.rowBase(selected)
+	var length []span
+	if w >= lengthColumnMin {
+		length = []span{{" ", t.dim}}
+	}
 	switch l.kind {
 	case artistsLevel:
 		artist := l.artists[i]
-		count := strconv.Itoa(len(m.lib.Albums(artist.ID)))
-		return line(w, base, []span{gutter, {artist.Name, t.plain}}, []span{{count + " ", t.dim}})
+		var count []span
+		if w >= countColumnMin {
+			count = []span{{strconv.Itoa(len(m.lib.Albums(artist.ID))) + " ", t.dim}}
+		}
+		return line(w, base, []span{gutter, {artist.Name, t.plain}}, count)
 	case albumsLevel:
 		album := l.albums[i]
-		year := "    "
-		if album.Year > 0 {
-			year = fmt.Sprintf("%4d", album.Year)
+		left := []span{gutter}
+		if w >= yearColumnMin {
+			year := "    "
+			if album.Year > 0 {
+				year = fmt.Sprintf("%4d", album.Year)
+			}
+			left = append(left, span{year + "  ", t.dim})
 		}
-		var playing []span
+		left = append(left, span{album.Title, t.plain})
+		var right []span
 		if m.status != nil && m.status.AlbumID == album.ID {
-			playing = []span{{"▶ ", t.dim}}
+			right = append(right, span{"▶ ", t.dim})
 		}
-		return line(w, base, []span{gutter, {year + "  ", t.dim}, {album.Title, t.plain}}, playing)
+		if length != nil && album.Duration > 0 {
+			right = append(right, span{formatDuration(time.Duration(album.Duration)*time.Second) + " ", t.dim})
+		}
+		return line(w, base, left, right)
 	default:
 		song := l.songs[i]
-		number := "   "
+		number := "  "
 		if song.Track > 0 {
-			number = fmt.Sprintf("%02d ", song.Track)
+			number = fmt.Sprintf("%02d", song.Track)
 		}
 		mark, title := span{"  ", t.plain}, t.plain
 		if m.status != nil && m.status.SongID == song.ID {
 			mark, title = span{m.playIcon() + " ", t.accent}, t.strong
 		}
-		left := []span{gutter, mark, {number + " ", t.dim}, {song.Title, title}}
+		left := []span{gutter, mark, {number + "  ", t.dim}, {song.Title, title}}
 		if song.DisplayArtist != "" && song.DisplayArtist != l.album.DisplayArtist {
 			left = append(left, span{"  · " + song.DisplayArtist, t.dim})
 		}
-		duration := formatDuration(time.Duration(song.Duration) * time.Second)
-		return line(w, base, left, []span{{duration + " ", t.dim}})
+		if length != nil {
+			length[0].text = formatDuration(time.Duration(song.Duration)*time.Second) + " "
+		}
+		return line(w, base, left, length)
 	}
+}
+
+// queueDigits is the width of the queue's position numbers.
+func (m *Model) queueDigits() int { return len(strconv.Itoa(len(m.queue))) }
+
+// queueColumns returns the widths of the queue's title and artist columns
+// (0 when the list is too narrow for the artist).
+func (m *Model) queueColumns(w int) (title, artist int) {
+	room := w - 4 - m.queueDigits() - 2 // the gutter, the mark, the number
+	if w >= lengthColumnMin {
+		room -= len("00:00 ") + 2
+	}
+	if w < artistColumnMin {
+		return max(1, room), 0
+	}
+	artist = min(28, room*2/5)
+	return room - artist - 2, artist
 }
 
 func (m *Model) queueRow(w, i int, selected bool) string {
@@ -267,12 +347,18 @@ func (m *Model) queueRow(w, i int, selected bool) string {
 	case i == m.playingPosition():
 		mark, title = span{m.playIcon() + " ", t.accent}, t.strong
 	}
-	digits := len(strconv.Itoa(len(m.queue)))
-	left := []span{gutter, mark, {fmt.Sprintf("%*d  ", digits, i+1), t.dim}, {item.Title, title}}
-	if item.Artist != "" {
-		left = append(left, span{"  · " + item.Artist, t.dim})
+	titleWidth, artistWidth := m.queueColumns(w)
+	left := []span{gutter, mark, {fmt.Sprintf("%*d  ", m.queueDigits(), i+1), t.dim}}
+	if artistWidth > 0 {
+		left = append(left, span{pad(clean(item.Title), titleWidth) + "  ", title}, span{item.Artist, t.dim})
+	} else {
+		left = append(left, span{item.Title, title})
 	}
-	return line(w, base, left, []span{{formatDuration(item.Duration) + " ", t.dim}})
+	var length []span
+	if w >= lengthColumnMin {
+		length = []span{{formatDuration(item.Duration) + " ", t.dim}}
+	}
+	return line(w, base, left, length)
 }
 
 // playIcon is ▶ or, when paused, ⏸.
@@ -373,12 +459,22 @@ func (m *Model) hints() []string {
 	return hints
 }
 
-// popup returns the help, the clear-the-queue question or the volume
+// popup returns the help, a question (quit, clear the queue) or the volume
 // pop-up, in that order of precedence, or "" for none.
 func (m *Model) popup(w, h int) string {
 	switch {
 	case m.helpOpen:
 		return m.helpBox(w, h)
+	case m.confirmQuit:
+		t := m.theme
+		lines := []string{
+			line(26, t.plain, []span{{"Quit kodipilot?", t.strong}}, []span{{"y / n", t.dim}}),
+			line(26, t.plain, []span{{"The music keeps playing.", t.plain}}, nil),
+		}
+		if w < 30 {
+			lines = []string{line(max(1, w-4), t.plain, []span{{"Quit?", t.strong}, {"  y / n", t.dim}}, nil)}
+		}
+		return m.framed(lines, w, h)
 	case m.confirmClear:
 		t := m.theme
 		question := []span{{"Clear the queue?", t.strong}, {"  y / n", t.dim}}
