@@ -12,22 +12,24 @@ import (
 
 func TestImageBoxSizes(t *testing.T) {
 	m := New(nil, &fakeClock{}, Options{Images: artwork.NewLoader(artwork.Config{})})
-	for _, tc := range []struct{ w, cols int }{
-		{60, 60}, {81, 81}, {82, 82}, {83, 83}, // whole width: 32 would leave under 50
-		{84, 32}, {113, 32}, {114, 32}, {115, 32},
-		{116, 64}, {145, 64}, {146, 64}, {147, 64},
-		{148, 96}, {200, 96},
-		{8, 8},
+	for _, tc := range []struct {
+		w, cols int
+		beside  bool
+	}{
+		{32, 32, false}, {60, 32, false}, {81, 32, false}, {83, 32, false}, // the text below
+		{84, 32, true}, {113, 32, true}, {115, 32, true},
+		{116, 64, true}, {146, 64, true}, {147, 64, true},
+		{148, 96, true}, {200, 96, true},
 	} {
 		cols, rows, ok := m.imageBox(tc.w, 40)
 		if !ok || cols != tc.cols || rows != cols/2 {
 			t.Errorf("pane %d: box %dx%d (%v), want %dx%d", tc.w, cols, rows, ok, tc.cols, tc.cols/2)
 		}
-		if cols < tc.w && tc.w-cols-besideGap < besideMin {
-			t.Errorf("pane %d: %d columns beside the box", tc.w, tc.w-cols-besideGap)
+		if beside := tc.w-cols-besideGap >= besideMin; beside != tc.beside {
+			t.Errorf("pane %d: text beside the box %v, want %v", tc.w, beside, tc.beside)
 		}
 	}
-	for _, size := range [][2]int{{7, 40}, {100, 3}} {
+	for _, size := range [][2]int{{31, 40}, {8, 40}, {100, 3}} {
 		if _, _, ok := m.imageBox(size[0], size[1]); ok {
 			t.Errorf("a box in %v", size)
 		}
@@ -35,6 +37,42 @@ func TestImageBoxSizes(t *testing.T) {
 	if _, _, ok := New(nil, &fakeClock{}, Options{}).imageBox(200, 40); ok {
 		t.Error("a box with images off")
 	}
+}
+
+func TestFullScreenDetailsStacked(t *testing.T) {
+	h := detailsHarness(t, 80, 24, writeCover(t))
+	h.press("i")
+	h.advance(detailsDelay)
+	lines := docLines(h)
+	art := artColumns(h)
+	if art > 32 {
+		t.Fatalf("image %d columns wide, want the 32-column box", art)
+	}
+	for y := range 16 {
+		if strings.Contains(lines[y], "Brian Eno") {
+			t.Errorf("text beside the box on line %d: %q", y, lines[y])
+		}
+		if w := ansi.StringWidth(strings.TrimRight(lines[y], " ")); w > 1+32 {
+			t.Errorf("line %d of the box is %d wide: %q", y, w, lines[y])
+		}
+	}
+	if got := strings.TrimRight(lines[17], " "); got != " Brian Eno" {
+		t.Errorf("first text line %q, want the title under the box", got)
+	}
+	h.want("Brian Eno") // 16 + 1 rows: the title is on screen
+}
+
+func TestNoBoxUnder32Columns(t *testing.T) {
+	h := detailsHarness(t, 33, 24, writeCover(t)) // full-screen details, 31 inner columns
+	h.press("i")
+	h.advance(detailsDelay)
+	if w, _ := h.m.paneSize(); w != 31 {
+		t.Fatalf("inner width %d", w)
+	}
+	if l := strings.TrimRight(docLines(h)[0], " "); l != " Brian Eno" {
+		t.Errorf("first line %q, want the title at the top", l)
+	}
+	h.wantNot("no image", "loading", "╭")
 }
 
 // column returns the display column where s starts in line l, or -1.

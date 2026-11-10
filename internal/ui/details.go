@@ -369,11 +369,13 @@ func (m *Model) artOptions() art.Options {
 // imageBox returns the image area of a pane w×h, reserved whether the item
 // has an image or not, so that the text starts at the same place either
 // way. It is the largest standard box that leaves besideMin columns for
-// the text beside it or, failing that, the whole width with the text
-// below. It may be taller than the pane: the details scroll. It is false
-// when images are off or the pane is too small for a box to mean anything.
+// the text beside it or, failing that, the smallest standard box with the
+// text below. It may be taller than the pane: the details scroll. It is
+// false when images are off, the pane is under imageBoxMinRows tall, or
+// narrower than the smallest box.
 func (m *Model) imageBox(w, h int) (cols, rows int, ok bool) {
-	if m.opts.Images == nil || w < imageBoxMinCols || h < imageBoxMinRows {
+	smallest := imageBoxWidths[len(imageBoxWidths)-1]
+	if m.opts.Images == nil || w < smallest || h < imageBoxMinRows {
 		return 0, 0, false
 	}
 	for _, cols := range imageBoxWidths {
@@ -381,18 +383,15 @@ func (m *Model) imageBox(w, h int) (cols, rows int, ok bool) {
 			return cols, cols / 2, true
 		}
 	}
-	return w, w / 2, true // the whole width, with the text below
+	return smallest, smallest / 2, true // with the text below
 }
 
 // imageBoxWidths are the standard widths of the image box, largest first;
 // a box is half as tall, in rows, as it is wide, for a square cover.
 var imageBoxWidths = [...]int{96, 64, 32}
 
-// The smallest image box worth showing.
-const (
-	imageBoxMinCols = 8
-	imageBoxMinRows = 4
-)
+// imageBoxMinRows is the least pane height with an image box.
+const imageBoxMinRows = 4
 
 // renderArt starts rendering the image the details pane shows, unless it is
 // rendered or rendering already.
