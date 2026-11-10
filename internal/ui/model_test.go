@@ -48,7 +48,10 @@ func TestWaitingForKodi(t *testing.T) {
 }
 
 func TestQuitKeys(t *testing.T) {
-	for _, keys := range [][]string{{"Q"}, {"ctrl+c"}, {"esc"}, {"enter", "esc", "esc"}, {"?", "ctrl+c"}} {
+	for _, keys := range [][]string{
+		{"Q", "y"}, {"Q", "enter"}, {"Q", "Q"}, {"ctrl+c"}, {"esc", "y"}, {"enter", "esc", "esc", "y"},
+		{"?", "ctrl+c"}, {"Q", "ctrl+c"}, {"Q", "x", "space", "y"},
+	} {
 		h := newHarness(t, 80, 12)
 		h.press(keys[:len(keys)-1]...)
 		if h.quit {
@@ -61,7 +64,7 @@ func TestQuitKeys(t *testing.T) {
 	}
 	for _, key := range []string{"Q", "esc"} {
 		h := waitingHarness(t)
-		h.press(key)
+		h.press(key, "y")
 		if !h.quit {
 			t.Errorf("%s did not quit while waiting for Kodi", key)
 		}
@@ -152,7 +155,7 @@ func TestQueueKey(t *testing.T) {
 }
 
 func TestPageAndEnds(t *testing.T) {
-	h := newHarness(t, 80, 5) // two list rows
+	h := newHarness(t, 80, 6) // two list rows under the column header
 	h.press("enter")          // five albums
 	h.press("pgdown")
 	if got := h.selected(); !strings.Contains(got, "Music for Films") {
@@ -423,5 +426,32 @@ func TestTextHelpers(t *testing.T) {
 		if got := formatDuration(d); got != want {
 			t.Errorf("formatDuration(%v) = %s, want %s", d, got, want)
 		}
+	}
+}
+
+func TestQuitQuestion(t *testing.T) {
+	h := newHarness(t, 80, 12)
+	h.press("p", "Q")
+	h.want("Quit kodipilot?", "The music keeps playing.", "y / n")
+	h.kodi.Reset()
+	h.press("x", ".", "tab", "?")
+	if calls := h.kodi.Methods(); len(calls) > 0 || h.m.view != libraryView || h.m.helpOpen {
+		t.Errorf("keys not ignored while asking: %v", calls)
+	}
+	h.press("n")
+	for _, stay := range []string{"n", "esc"} {
+		h.press("Q")
+		h.press(stay)
+		h.wantNot("Quit kodipilot?")
+		if h.quit {
+			t.Fatalf("%s quit", stay)
+		}
+	}
+	h.press("esc", "y") // Esc at the top asks too
+	if !h.quit {
+		t.Error("y did not quit")
+	}
+	if playing, _, _ := h.kodi.Playing(); !playing {
+		t.Error("the music stopped")
 	}
 }

@@ -138,6 +138,7 @@ type Model struct {
 		lines []string
 	}
 	confirmClear bool // asking whether to clear the queue
+	confirmQuit  bool // asking whether to quit
 	paneHidden   bool // the user hid the details pane
 	detailsFull  bool // the details fill the screen (when the pane does not fit)
 
@@ -312,6 +313,8 @@ func (m *Model) key(key string) tea.Cmd {
 	case m.helpOpen:
 		m.helpKey(key)
 		return nil
+	case m.confirmQuit:
+		return m.quitKey(key)
 	case m.confirmClear:
 		return m.confirmKey(key)
 	case m.fullDetails() && (key == "esc" || key == "left"):
@@ -374,7 +377,24 @@ func (m *Model) pageDown() tea.Cmd { m.move(+max(1, m.listHeight())); return nil
 func (m *Model) home() tea.Cmd     { m.move(-farAway); return nil }
 func (m *Model) end() tea.Cmd      { m.move(+farAway); return nil }
 
-func (m *Model) quit() tea.Cmd { return tea.Quit }
+// quit asks whether to quit; ctrl+c quits at once.
+func (m *Model) quit() tea.Cmd {
+	m.confirmQuit = true
+	return nil
+}
+
+func (m *Model) quitNow() tea.Cmd { return tea.Quit }
+
+// quitKey handles a key while the quit question is open.
+func (m *Model) quitKey(key string) tea.Cmd {
+	switch key {
+	case "y", "Y", "enter", "Q":
+		return tea.Quit
+	case "n", "N", "esc":
+		m.confirmQuit = false
+	}
+	return nil
+}
 
 func (m *Model) openHelp() tea.Cmd {
 	m.helpOpen, m.helpTop = true, 0
@@ -471,7 +491,7 @@ func (m *Model) backOrQuit() tea.Cmd {
 	if len(m.levels) > 1 {
 		return m.back()
 	}
-	return tea.Quit
+	return m.quit()
 }
 
 // selection is the songs of the selected library row: an artist's albums,
@@ -610,7 +630,11 @@ func (m *Model) current() *level {
 }
 
 // listHeight is the number of list rows on screen.
-func (m *Model) listHeight() int { return max(0, m.height-3) }
+func (m *Model) listHeight() int { return max(0, m.middleHeight()-1) } // below the column header
+
+// middleHeight is the number of rows between the header and the status
+// line.
+func (m *Model) middleHeight() int { return max(0, m.height-3) }
 
 func (m *Model) move(delta int) {
 	if m.view == queueView {

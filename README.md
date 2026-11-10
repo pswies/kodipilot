@@ -28,7 +28,8 @@ as Kodi does.
 - A details pane with everything Kodi knows about the highlighted artist,
   album or track, and its cover or artist image drawn in the terminal.
 - One static binary and no saved state: everything comes from Kodi.
-- Quitting leaves the music playing.
+- Quitting (`Q`, after a confirmation, or ctrl+c at once) leaves the music
+  playing.
 
 ## Install
 
@@ -122,7 +123,8 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | s | shuffle on / off | — |
 | F5, ctrl+r | reload the library | — |
 | ? / h | this help | — |
-| Q, ctrl+c | quit (the music keeps playing) | — |
+| Q | quit, after asking (the music keeps playing) | — |
+| ctrl+c | quit now | — |
 
 **Details**
 
@@ -136,7 +138,7 @@ light and dark terminals and stay off when `NO_COLOR` is set.
 | Key | Action | Kodi |
 |---|---|---|
 | Enter, → | open; on a track: play its album from there | Enter |
-| ←, Backspace, Esc | back (Esc at the top quits) | Backspace, Esc |
+| ←, Backspace, Esc | back (Esc at the top asks to quit) | Backspace, Esc |
 | p | play now: artist, album, or from a track | p |
 | q | add to the queue | q |
 
@@ -160,8 +162,10 @@ On terminals at least 90 columns wide and 14 rows tall, a pane left of the list
 shows the highlighted item. On 120 columns and more the list takes a quarter of
 the width. `i`, Kodi's info key, hides and shows the pane; on smaller terminals
 it opens the details full-screen instead (Esc, `←` or `i` close them). `[` and
-`]` scroll long biographies, reviews and lyrics; the image sits at the top left,
-with the text beside it when there is room, flowing on underneath.
+`]` scroll the details. The image sits at the top left in a box 32, 64 or 96
+columns wide, the largest that leaves the text 50 columns beside it; the text
+flows on underneath. On narrow panes the image takes the whole width, with the
+text below.
 
 - **Artist:** image, genre, style, born / formed / years active, album count and
   biography.

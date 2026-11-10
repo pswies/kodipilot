@@ -41,7 +41,11 @@ func TestLibraryRequests(t *testing.T) {
 		Method: "AudioLibrary.GetArtists",
 		Params: `{"albumartistsonly":true,"sort":{"ignorearticle":true,"method":"artist"}}`,
 	}
-	if calls[0] != want || calls[1].Method != "AudioLibrary.GetAlbums" {
+	albums := koditest.Call{
+		Method: "AudioLibrary.GetAlbums",
+		Params: `{"properties":["title","year","artistid","displayartist","albumduration"]}`,
+	}
+	if calls[0] != want || calls[1] != albums {
 		t.Errorf("calls = %v", calls)
 	}
 }
