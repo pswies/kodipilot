@@ -19,10 +19,9 @@ const intro = "kodipilot lets you steer Kodi's music from any terminal: browse y
 	"I hope it brings your record collection a little closer, too."
 
 const (
-	helpMaxWidth  = 76 // the help box, frame and padding included
-	kodiColumnMin = 70 // the least inner width that shows the Kodi column
-	keyIndent     = 2  // before the key column
-	columnGap     = 2  // between the columns
+	helpMaxWidth = 76 // the help box, frame and padding included
+	keyIndent    = 2  // before the key column
+	columnGap    = 2  // between the columns
 )
 
 // helpFooter is the last line of the help.
@@ -35,7 +34,7 @@ type helpLine struct{ left, right []span }
 // helpDoc lays out the help for inner columns, styled with t: the title row
 // (when titled), the introduction, the key table in sections and the
 // footer. Keys are right-aligned in their column and actions wrap within
-// theirs; the Kodi equivalents form a dim third column when there is room.
+// theirs. (The Kodi equivalents are documented in the README only.)
 func helpDoc(table []keySection, t theme, inner int, version string, titled bool) []helpLine {
 	var lines []helpLine
 	if titled {
@@ -51,52 +50,28 @@ func helpDoc(table []keySection, t theme, inner int, version string, titled bool
 	}
 	lines = append(lines, helpLine{})
 
-	keyWidth, kodiWidth := 0, 0
+	keyWidth := 0
 	for _, section := range table {
 		for _, row := range section.rows {
 			keyWidth = max(keyWidth, width(row.label))
-			kodiWidth = max(kodiWidth, width(row.kodi))
 		}
 	}
-	withKodi := inner >= kodiColumnMin
-	actionWidth := inner - keyIndent - keyWidth - columnGap
-	if withKodi {
-		actionWidth -= kodiWidth + columnGap
-	}
-	kodiCell := func(s string) []span {
-		if !withKodi || s == "" {
-			return nil
-		}
-		return []span{{pad(s, kodiWidth), t.dim}}
-	}
+	actionWidth := max(1, inner-keyIndent-keyWidth-columnGap)
 
-	kodiHeading := withKodi // over the first section with Kodi keys
 	for _, section := range table {
-		// The title, then a rule to the end of the line, with the Kodi
-		// column's heading set into the first one.
-		title := width(section.title)
-		heading := []span{{section.title, t.strong}}
-		if kodiHeading && slices.ContainsFunc(section.rows, func(r keyRow) bool { return r.kodi != "" }) {
-			column := inner - kodiWidth
-			heading = append(heading,
-				span{" " + rule(column-title-2) + " ", t.dim},
-				span{"in Kodi", t.dim},
-				span{" " + rule(inner-column-len("in Kodi")-1), t.dim})
-			kodiHeading = false
-		} else {
-			heading = append(heading, span{" " + rule(inner-title-1), t.dim})
-		}
+		// The title, then a rule to the end of the line.
+		heading := []span{{section.title, t.strong}, {" " + rule(inner-width(section.title)-1), t.dim}}
 		lines = append(lines, helpLine{left: heading})
 		for _, row := range section.rows {
-			action := flow{room: func(int) int { return max(1, actionWidth) }}
+			action := flow{room: func(int) int { return actionWidth }}
 			action.text(row.action, nil, t.plain)
 			for i, spans := range action.lines {
-				keys, right := "", []span(nil)
+				keys := ""
 				if i == 0 {
-					keys, right = strings.Repeat(" ", keyWidth-width(row.label))+row.label, kodiCell(row.kodi)
+					keys = strings.Repeat(" ", keyWidth-width(row.label)) + row.label
 				}
 				left := []span{{strings.Repeat(" ", keyIndent) + pad(keys, keyWidth+columnGap), t.accent}}
-				lines = append(lines, helpLine{append(left, spans...), right})
+				lines = append(lines, helpLine{left: append(left, spans...)})
 			}
 		}
 		lines = append(lines, helpLine{})

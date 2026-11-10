@@ -14,7 +14,7 @@ func words(s string) string {
 }
 
 func TestHelpContent(t *testing.T) {
-	h := newHarness(t, 72, 70) // without the Kodi column, so that wrapped actions read on
+	h := newHarness(t, 80, 70)
 	h.m.opts.Version = "0.0.4"
 	h.press("?")
 	text := words(strings.Join(h.screen(), "\n"))
@@ -126,14 +126,12 @@ func rowOf(section keySection, l string) *keyRow {
 	return nil
 }
 
-func TestHelpNarrowDropsKodiColumn(t *testing.T) {
-	for width, kodi := range map[int]bool{80: true, 76: true, 73: false, 60: false, 40: false} {
+func TestHelpWidths(t *testing.T) {
+	for _, width := range []int{80, 76, 73, 60, 40} {
 		h := newHarness(t, width, 80)
 		h.press("?")
-		if got := h.contains("in Kodi"); got != kodi {
-			t.Errorf("width %d: Kodi column %v, want %v", width, got, kodi)
-		}
 		h.want("Piotr Święs")
+		h.wantNot("in Kodi")
 		for _, l := range h.screen() {
 			if w := ansi.StringWidth(l); w > width {
 				t.Errorf("width %d: line %q is %d wide", width, l, w)
@@ -142,9 +140,27 @@ func TestHelpNarrowDropsKodiColumn(t *testing.T) {
 	}
 }
 
+// TestHelpWithoutKodiColumn checks that no Kodi equivalent appears beside
+// an action, and that the actions use the width it freed.
+func TestHelpWithoutKodiColumn(t *testing.T) {
+	text := words(KeysHelp())
+	for _, kodi := range []string{"in Kodi", "same", "Backspace, Esc Backspace, Esc"} {
+		if strings.Contains(text, kodi) {
+			t.Errorf("--help shows the Kodi column (%q)", kodi)
+		}
+	}
+	plain := KeysHelp()
+	for _, action := range []string{"open; on a track: play its album from there", "play now: artist, album, or from a track",
+		"show / hide (full screen when narrow)"} {
+		if !strings.Contains(plain, action) {
+			t.Errorf("--help wraps %q", action)
+		}
+	}
+}
+
 func TestKeysHelp(t *testing.T) {
 	text := words(KeysHelp())
-	for _, w := range []string{intro, "Everywhere", "Details", "Library", "Queue", "in Kodi", helpFooter()} {
+	for _, w := range []string{intro, "Everywhere", "Details", "Library", "Queue", helpFooter()} {
 		if !strings.Contains(text, words(w)) {
 			t.Errorf("--help lacks %q", w)
 		}
