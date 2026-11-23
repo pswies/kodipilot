@@ -7,7 +7,7 @@ require (
 	charm.land/lipgloss/v2 v2.1.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/colorprofile v0.4.3
-	github.com/charmbracelet/ultraviolet v0.0.0-20261119104433-f0c8309c9960
+	github.com/charmbracelet/ultraviolet v0.0.0-20261119151026-8ecbcf0e188c
 	github.com/charmbracelet/x/ansi v0.11.10
 	golang.org/x/image v0.48.0
 	golang.org/x/term v0.48.0
